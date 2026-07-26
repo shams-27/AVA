@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# AVA — Terminal Assistant (Cross-Platform: Linux & Windows)
-# Modern interactive setup automation script. No dependencies beyond the
-# Python standard library — run it straight from a fresh checkout.
+# AVA — Terminal Assistant (Linux & Windows)
+# Interactive dev-environment setup tool. Standard library only.
 #
 #   python3 ava.py                 (Linux / macOS)
 #   py ava.py                      (Windows)
-#   python3 ava.py --force-windows (test Windows-only menu items on Linux/macOS)
+#   python3 ava.py --force-windows (test Windows-only menu items elsewhere)
 # ==============================================================================
 
 from __future__ import annotations
@@ -37,22 +36,17 @@ IS_WINDOWS = platform.system() == "Windows"
 IS_MACOS = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
 
-# --- Test hook -----------------------------------------------------------
-# --force-windows simulates Windows-mode detection on any OS so the
-# Windows-only menu items (e.g. Configure GCC) and code paths can be
-# reviewed without a real Windows machine. Actual Windows-only commands
-# (winget, choco, powershell) still won't exist on a non-Windows box, so
-# those steps will fail with clean, expected error messages rather than
-# actually installing anything — this only proves the menu/branching logic.
+# --- Test hook -------------------------------------------------------------
+# Simulates Windows detection on any OS to exercise Windows-only menu items
+# (e.g. Configure GCC) without a real Windows machine. Actual Windows-only
+# commands (winget/choco/powershell) still fail cleanly since they don't exist.
 FORCE_WINDOWS = "--force-windows" in sys.argv
 if FORCE_WINDOWS:
     sys.argv.remove("--force-windows")
     IS_WINDOWS = True
 
-# Raw single-keypress reading (for the arrow-key menu) is genuinely
-# platform-specific — termios/tty don't exist on Windows and msvcrt
-# doesn't exist elsewhere. Keyed off the real OS rather than IS_WINDOWS,
-# so --force-windows testing doesn't try to import msvcrt on Linux/macOS.
+# Keyed off the real OS, not IS_WINDOWS, so --force-windows testing doesn't
+# try to import termios/tty or msvcrt on the wrong platform.
 _REAL_WINDOWS = platform.system() == "Windows"
 
 if not _REAL_WINDOWS:
@@ -61,9 +55,7 @@ if not _REAL_WINDOWS:
 
 
 # ------------------------------------------------------------------------------
-# Terminal capability + color setup (works on Linux/macOS ttys and on the
-# modern Windows Terminal / Windows 10+ conhost, which both support ANSI
-# once VT processing is switched on).
+# Terminal capability and color setup
 # ------------------------------------------------------------------------------
 def _enable_windows_vt() -> bool:
     """Turn on ANSI/VT100 escape processing in the Windows console."""
@@ -101,14 +93,9 @@ class C:
 
 # ------------------------------------------------------------------------------
 # Unicode glyph support detection.
-# Modern terminals (Windows Terminal, most Linux/macOS terminal emulators,
-# VS Code's integrated terminal) render box-drawing lines and symbol glyphs
-# (⚡ ✔ ✖ ⚠ ❯) fine. The legacy Windows conhost window (the classic cmd.exe/
-# PowerShell console, opened without Windows Terminal) often can't — glyphs
-# fall back to tofu boxes or '?', and the lightning bolt's actual on-screen
-# width varies by font, throwing off the box alignment math. Rather than
-# guess, detect the known environment markers modern terminals set and fall
-# back to a plain ASCII glyph/box set everywhere else.
+# Legacy Windows conhost (classic cmd.exe/PowerShell without Windows
+# Terminal) often can't render box-drawing/symbol glyphs correctly. Detect
+# known modern-terminal markers and fall back to plain ASCII otherwise.
 # ------------------------------------------------------------------------------
 def _detect_unicode_support() -> bool:
     if not IS_WINDOWS:
@@ -171,11 +158,8 @@ def log_error(msg: str) -> None:
 
 
 def clear_screen() -> None:
-    """Clear the terminal so each menu render starts from a blank screen.
-    Uses the native console-clear command for reliability (works even on
-    older Windows consoles without VT processing enabled). Deliberately
-    keyed off the real OS rather than IS_WINDOWS, so --force-windows
-    testing still clears the screen correctly on Linux/macOS."""
+    """Clears the terminal via the native console-clear command. Keyed off
+    the real OS, not IS_WINDOWS, so --force-windows testing still works."""
     if not _TTY:
         return
     os.system("cls" if platform.system() == "Windows" else "clear")
@@ -211,10 +195,8 @@ def render_intro_box() -> None:
 
 
 # ------------------------------------------------------------------------------
-# Live-status mini box runner — equivalent of run_with_mini_box.
-# Runs a command, tails its last output line into a small live box, and
-# reports a clean success/failure summary. Falls back to a plain spinner
-# line when stdout isn't a real tty (e.g. piped output, some CI shells).
+# Runs a command, tailing its last output line into a small live status box,
+# and reports success/failure. Falls back to a plain line when not a tty.
 # ------------------------------------------------------------------------------
 def run_with_status(label: str, cmd: list[str] | str, shell: bool = False) -> bool:
     log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
@@ -287,9 +269,8 @@ def run_with_status(label: str, cmd: list[str] | str, shell: bool = False) -> bo
 
 
 # ------------------------------------------------------------------------------
-# Privilege handling — sudo on Linux, admin-elevation check on Windows.
-# Windows console apps can't self-elevate mid-run without relaunching, so we
-# check status and tell the user to re-run from an elevated prompt instead.
+# Privilege handling — sudo on Linux, admin check on Windows. Windows console
+# apps can't self-elevate mid-run, so we prompt the user to re-run elevated.
 # ------------------------------------------------------------------------------
 def is_admin() -> bool:
     if IS_WINDOWS:
@@ -312,8 +293,8 @@ def ensure_privileges() -> list[str] | None:
         return None
 
     if shutil.which("sudo"):
-        # Prime the sudo timestamp once, up front, so later calls don't
-        # interrupt a running status box asking for a password.
+        # Prime the sudo timestamp up front so later calls don't interrupt
+        # a running status box with a password prompt.
         try:
             subprocess.run(["sudo", "-v"], check=True)
         except subprocess.CalledProcessError:
@@ -356,8 +337,7 @@ def download_vscode_profile() -> None:
 
 
 def _run_python_task(label: str, fn) -> bool:
-    """Like run_with_status, but for a plain Python callable instead of a
-    subprocess (used for the pure-stdlib download step)."""
+    """Like run_with_status, but for a plain Python callable."""
     result: dict[str, object] = {}
 
     def _target() -> None:
@@ -503,9 +483,8 @@ def configure_nodejs() -> None:
 
 # ------------------------------------------------------------------------------
 # FEATURE: Configure GCC (Windows only)
-# Hands off to an external, interactive PowerShell script. Its stdio is
-# inherited directly (not captured into a status box) so its own UI draws
-# normally in the console; once it exits, control returns to AVA's menu.
+# Hands off to an external PowerShell script with stdio inherited directly,
+# so its interactive UI draws normally; control returns once it exits.
 # ------------------------------------------------------------------------------
 def configure_gcc() -> None:
     if not IS_WINDOWS:
@@ -533,15 +512,12 @@ def configure_gcc() -> None:
 
 # ------------------------------------------------------------------------------
 # Raw single-keypress reading (arrow keys, space, enter, quit).
-# Unix: cbreak mode via termios/tty, arrow keys arrive as ESC [ A/B.
-# Windows: msvcrt.getch() already reads unbuffered, arrow keys arrive as
-# an extended-key prefix (0x00 or 0xE0) followed by a scan code.
+# Unix: cbreak mode via termios/tty. Windows: msvcrt.getch(), unbuffered.
 # ------------------------------------------------------------------------------
 @contextlib.contextmanager
 def raw_input_mode():
-    """Puts the terminal into a mode where single keypresses can be read
-    immediately, with no Enter needed and no local echo. No-op on Windows,
-    where msvcrt.getch() already behaves this way natively."""
+    """Enables immediate single-keypress reads with no Enter or echo.
+    No-op on Windows, where msvcrt.getch() already behaves this way."""
     if _REAL_WINDOWS:
         yield
         return
@@ -555,9 +531,8 @@ def raw_input_mode():
 
 
 def _read_key_unix() -> str:
-    # Read raw bytes straight off the file descriptor rather than through
-    # sys.stdin: TextIOWrapper does its own internal read-ahead buffering,
-    # which would hide already-arrived bytes from the select() peek below.
+    # Read raw bytes from the fd directly; sys.stdin's internal buffering
+    # would hide already-arrived bytes from the select() peek below.
     fd = sys.stdin.fileno()
     ch = os.read(fd, 1).decode(errors="replace")
     if ch == "\x03":  # Ctrl-C
@@ -569,13 +544,8 @@ def _read_key_unix() -> str:
     if ch in ("q", "Q"):
         return "QUIT"
     if ch == "\x1b":
-        # Could be a lone Escape keypress or the start of a multi-byte
-        # arrow-key sequence: ESC [ A/B (most terminals) or ESC O A/B
-        # ("application cursor keys" mode, used by some terminals/TERM
-        # settings). Peek ahead to tell a lone Escape from a sequence.
-        # 150ms is generous enough to absorb latency from slower
-        # terminals/remote sessions while still feeling instant on a
-        # real Escape press.
+        # Distinguish a lone Escape from an arrow-key sequence (ESC [ A/B
+        # or ESC O A/B) by peeking ahead with a short timeout.
         ESC_WAIT = 0.15
         if select.select([fd], [], [], ESC_WAIT)[0]:
             ch2 = os.read(fd, 1).decode(errors="replace")
@@ -614,11 +584,8 @@ def read_key() -> str:
 
 
 def checkbox_menu(items: list[str]) -> list[int] | None:
-    """Arrow-key + space multi-select menu. Up/Down moves the cursor,
-    Space toggles the highlighted item, Enter runs everything checked,
-    and 'q'/Esc quits without running anything.
-
-    Returns the list of selected indices, or None if the user quit."""
+    """Arrow-key + space multi-select menu. Returns the selected indices,
+    or None if the user quit."""
     selected = [False] * len(items)
     cursor = 0
 
@@ -664,9 +631,7 @@ def checkbox_menu(items: list[str]) -> list[int] | None:
                     chosen = [i for i, s in enumerate(selected) if s]
                     if chosen:
                         return chosen
-                    # Nothing checked yet — treat Enter as "run just the
-                    # highlighted item" so a single-choice pick doesn't
-                    # need an extra space press.
+                    # Nothing checked — run just the highlighted item.
                     return [cursor]
                 elif key == "QUIT":
                     return None
@@ -689,8 +654,7 @@ if IS_WINDOWS:
 
 
 def interactive_menu() -> bool:
-    """Shows the checkbox menu, runs whatever was selected, and returns
-    False when the user chose to quit."""
+    """Shows the menu, runs the selection, and returns False on quit."""
     labels = [label for label, _ in MENU_ITEMS]
     chosen = checkbox_menu(labels)
 
