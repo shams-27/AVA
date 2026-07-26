@@ -7,11 +7,13 @@ no dependencies beyond the standard library.
 ## Quick start
 
 ### Linux / macOS
+Open Linux/Mac Terminal, type in the line given below and press Enter.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shams-27/AVA/main/install.sh | bash
 ```
+### Windows 
 
-### Windows (PowerShell)
+Open Windows Terminal, type in the line given below and press Enter.
 ```powershell
 irm https://raw.githubusercontent.com/shams-27/AVA/main/install.ps1 | iex
 ```
