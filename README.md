@@ -4,6 +4,18 @@ AVA is an interactive, cross-platform terminal assistant that automates
 common developer environment setup tasks. It's a single Python file with
 no dependencies beyond the standard library.
 
+## Quick start
+
+### Linux / macOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/shams-27/AVA/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/shams-27/AVA/main/install.ps1 | iex
+```
+
 ## What it does
 
 AVA presents a menu of setup tasks and runs whichever ones you pick:
