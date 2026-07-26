@@ -27,12 +27,27 @@ function Find-Python {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         return "py"
     }
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        # Windows ships a fake "python" stub that opens the Store if no
-        # real interpreter is installed — filter that out.
-        $verOutput = & python --version 2>&1
-        if ($LASTEXITCODE -eq 0 -and $verOutput -match "Python 3") {
-            return "python"
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCmd) {
+        # Windows ships a fake "python" app execution alias that just opens
+        # the Microsoft Store when no real interpreter is installed. Running
+        # it prints to stderr, which — combined with $ErrorActionPreference
+        # = "Stop" above — would otherwise crash this whole script before
+        # we ever get a chance to install a real Python. Suppress that
+        # locally and treat any failure here as "no usable python found".
+        $prevPref = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $verOutput = & python --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and $verOutput -match "Python 3") {
+                return "python"
+            }
+        }
+        catch {
+            # Fall through — the stub throwing counts as "not usable".
+        }
+        finally {
+            $ErrorActionPreference = $prevPref
         }
     }
     return $null
@@ -47,11 +62,21 @@ if (-not $PythonBin) {
     Info "Python not found. Attempting to install it..."
 
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        winget install -e --id Python.Python.3.12 --silent `
-            --accept-package-agreements --accept-source-agreements
+        try {
+            winget install -e --id Python.Python.3.12 --silent `
+                --accept-package-agreements --accept-source-agreements
+        }
+        catch {
+            Err "winget reported an error, but it may have still installed Python. Checking..."
+        }
     }
     elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-        choco install python -y
+        try {
+            choco install python -y
+        }
+        catch {
+            Err "choco reported an error, but it may have still installed Python. Checking..."
+        }
     }
     else {
         Err "Neither winget nor choco is available. Please install Python manually from https://python.org and re-run this script."
