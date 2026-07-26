@@ -1,7 +1,5 @@
 # ==============================================================================
 # AVA bootstrap (Windows)
-# Ensures Python is present, installing it if necessary, then downloads
-# AVA.py into a temp directory and runs it. Nothing is left behind.
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/shams-27/AVA/main/install.ps1 | iex
@@ -19,22 +17,18 @@ function Info($msg)  { Write-Host "  i  $msg" -ForegroundColor Cyan }
 function Ok($msg)    { Write-Host "  +  $msg" -ForegroundColor Green }
 function Err($msg)   { Write-Host "  x  $msg" -ForegroundColor Red }
 
-# ------------------------------------------------------------------------------
-# 1. Locate an existing Python interpreter (the "py" launcher is the most
-#    reliable signal on Windows; fall back to "python" on PATH).
-# ------------------------------------------------------------------------------
+# --- 1. Locate an existing Python interpreter --------------------------------
+# The "py" launcher is the most reliable signal on Windows; fall back to
+# "python" on PATH.
 function Find-Python {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         return "py"
     }
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     if ($pythonCmd) {
-        # Windows ships a fake "python" app execution alias that just opens
-        # the Microsoft Store when no real interpreter is installed. Running
-        # it prints to stderr, which — combined with $ErrorActionPreference
-        # = "Stop" above — would otherwise crash this whole script before
-        # we ever get a chance to install a real Python. Suppress that
-        # locally and treat any failure here as "no usable python found".
+        # Suppress errors locally: Windows ships a fake "python" alias that
+        # just opens the Microsoft Store when no real interpreter exists,
+        # and its stderr output would otherwise abort the script.
         $prevPref = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
         try {
@@ -44,7 +38,7 @@ function Find-Python {
             }
         }
         catch {
-            # Fall through — the stub throwing counts as "not usable".
+            # Stub throwing counts as "not usable" — fall through.
         }
         finally {
             $ErrorActionPreference = $prevPref
@@ -55,9 +49,7 @@ function Find-Python {
 
 $PythonBin = Find-Python
 
-# ------------------------------------------------------------------------------
-# 2. If missing, install it via winget (falls back to choco if available)
-# ------------------------------------------------------------------------------
+# --- 2. Install Python via winget, falling back to choco --------------------
 if (-not $PythonBin) {
     Info "Python not found. Attempting to install it..."
 
@@ -83,7 +75,7 @@ if (-not $PythonBin) {
         exit 1
     }
 
-    # Refresh PATH for this session so the newly installed interpreter is visible
+    # Refresh PATH so the newly installed interpreter is visible this session
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [System.Environment]::GetEnvironmentVariable("Path", "User")
 
@@ -100,9 +92,7 @@ else {
     Info "Python found: $version"
 }
 
-# ------------------------------------------------------------------------------
-# 3. Download AVA.py
-# ------------------------------------------------------------------------------
+# --- 3. Download AVA.py ------------------------------------------------------
 Info "Downloading AVA..."
 try {
     Invoke-WebRequest -Uri $AvaRawUrl -OutFile $AvaPath -UseBasicParsing
@@ -113,9 +103,7 @@ catch {
     exit 1
 }
 
-# ------------------------------------------------------------------------------
-# 4. Launch AVA, then clean up the temp directory
-# ------------------------------------------------------------------------------
+# --- 4. Launch AVA, then clean up the temp directory -------------------------
 try {
     & $PythonBin $AvaPath @args
 }
