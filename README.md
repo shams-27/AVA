@@ -1,45 +1,51 @@
-# AVA
+# AVA — Terminal Assistant
 
-A terminal assistant that automates developer environment setup.
+AVA is an interactive, cross-platform terminal assistant that automates
+common developer environment setup tasks. It's a single Python file with
+no dependencies beyond the standard library.
 
-## Quick start (single command, nothing installed permanently)
+## What it does
 
-### Linux / macOS
+AVA presents a menu of setup tasks and runs whichever ones you pick:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/shams-27/AVA/main/install.sh | bash
-```
+- **Download VS Code Profile** — fetches a preconfigured VS Code settings
+  profile to your Downloads folder.
+- **Configure OpenJDK** — detects your platform's package manager and
+  installs OpenJDK if it isn't already present.
+- **Configure Node.js & npm** — same idea, for Node.js and npm.
+- **Configure GCC** *(Windows only)* — hands off to an interactive
+  PowerShell script that sets up a GCC toolchain.
 
-### Windows (PowerShell)
+For each task, AVA checks whether the tool is already installed before
+doing anything, so re-running it is always safe.
 
-```powershell
-irm https://raw.githubusercontent.com/shams-27/AVA/main/install.ps1 | iex
-```
+## How the menu works
 
-Each script:
+- **↑ / ↓** — move the highlighted item
+- **Space** — check/uncheck a task
+- **Enter** — run everything checked (or, if nothing's checked, run just
+  the highlighted item)
+- **q** or **Esc** — quit without running anything
 
-1. Checks for a Python 3 interpreter.
-2. Installs one if missing — via `apt`/`dnf`/`pacman`/`zypper`/`apk`/`brew` on
-   Linux/macOS, or `winget`/`choco` on Windows.
-3. Downloads `AVA.py` into a temp directory.
-4. Runs it.
-5. Deletes the temp directory afterward — nothing is left on disk.
+You can select and queue up multiple tasks at once before running them.
 
-## Repo structure
+## Platform support
 
-```
-.
-├── AVA.py          # main application
-├── install.sh      # Linux/macOS bootstrap (fetch + run, one-liner via curl)
-├── install.ps1      # Windows bootstrap (fetch + run, one-liner via irm)
-└── README.md
-```
+AVA detects the OS it's running on (Linux, macOS, or Windows) and adjusts
+its behavior accordingly:
 
-## Note on security
+- Package manager detection: `apt`, `dnf`, `pacman`, `zypper`, `apk` on
+  Linux; `winget`, `choco` on Windows.
+- Elevated privileges are requested via `sudo` on Linux/macOS; on Windows,
+  AVA asks you to re-run it from an elevated terminal if needed.
+- Output adapts to the terminal it's running in — full color and Unicode
+  glyphs on modern terminals, a plain ASCII fallback otherwise.
 
-Piping a remote script into `bash`/`iex` runs code with your current user's
-privileges (this is the same pattern used by nvm, rustup, and Homebrew's
-installer). Anyone using the one-liner is trusting `shams-27/AVA`'s `main`
-branch. Once the project is stable, it's worth pointing the URL at a specific
-commit or tag instead of always `main`, so the command's behavior can't
-change silently later.
+## Requirements
+
+- Python 3.9+
+- An interactive terminal (AVA needs a real TTY to run)
+
+## Versioning
+
+The current version is printed in AVA's header box on launch.
