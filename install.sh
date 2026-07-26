@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # AVA bootstrap (Linux / macOS)
-# Ensures python3 is present, installing it if necessary, then downloads
-# AVA.py into a temp directory and runs it. Nothing is left behind.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/shams-27/AVA/main/install.sh | bash
@@ -20,9 +18,7 @@ info()  { printf '  \033[36mi\033[0m  %s\n' "$1"; }
 ok()    { printf '  \033[32m✔\033[0m  %s\n' "$1"; }
 err()   { printf '  \033[31m✖\033[0m  %s\n' "$1" >&2; }
 
-# ------------------------------------------------------------------------------
-# 1. Locate an existing Python 3 interpreter
-# ------------------------------------------------------------------------------
+# --- 1. Locate an existing Python 3 interpreter -----------------------------
 find_python() {
     for candidate in python3 python; do
         if command -v "$candidate" >/dev/null 2>&1; then
@@ -38,9 +34,7 @@ find_python() {
 
 PYTHON_BIN="$(find_python || true)"
 
-# ------------------------------------------------------------------------------
-# 2. If missing, install it using whatever package manager is available
-# ------------------------------------------------------------------------------
+# --- 2. Install Python 3 if missing, using the available package manager ----
 if [ -z "$PYTHON_BIN" ]; then
     info "Python 3 not found. Attempting to install it..."
 
@@ -85,9 +79,7 @@ else
     info "Python 3 found: $($PYTHON_BIN --version)"
 fi
 
-# ------------------------------------------------------------------------------
-# 3. Download AVA.py
-# ------------------------------------------------------------------------------
+# --- 3. Download AVA.py ------------------------------------------------------
 info "Downloading AVA..."
 if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$AVA_RAW_URL" -o "$AVA_PATH"
@@ -98,10 +90,7 @@ else
     exit 1
 fi
 
-# ------------------------------------------------------------------------------
-# 4. Launch AVA
-# Note: input/output are inherited directly (not run in a subshell pipe),
-# so AVA's interactive menu (input()) works normally even though this
-# script itself was invoked via 'curl | bash'.
-# ------------------------------------------------------------------------------
+# --- 4. Launch AVA -----------------------------------------------------------
+# stdin is bound directly to the tty so the interactive menu still works
+# even though this script was invoked via 'curl | bash'.
 "$PYTHON_BIN" "$AVA_PATH" "$@" < /dev/tty
