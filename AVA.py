@@ -11,10 +11,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import platform
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -46,6 +48,16 @@ FORCE_WINDOWS = "--force-windows" in sys.argv
 if FORCE_WINDOWS:
     sys.argv.remove("--force-windows")
     IS_WINDOWS = True
+
+# Raw single-keypress reading (for the arrow-key menu) is genuinely
+# platform-specific — termios/tty don't exist on Windows and msvcrt
+# doesn't exist elsewhere. Keyed off the real OS rather than IS_WINDOWS,
+# so --force-windows testing doesn't try to import msvcrt on Linux/macOS.
+_REAL_WINDOWS = platform.system() == "Windows"
+
+if not _REAL_WINDOWS:
+    import termios
+    import tty
 
 
 # ------------------------------------------------------------------------------
@@ -520,6 +532,151 @@ def configure_gcc() -> None:
 
 
 # ------------------------------------------------------------------------------
+# Raw single-keypress reading (arrow keys, space, enter, quit).
+# Unix: cbreak mode via termios/tty, arrow keys arrive as ESC [ A/B.
+# Windows: msvcrt.getch() already reads unbuffered, arrow keys arrive as
+# an extended-key prefix (0x00 or 0xE0) followed by a scan code.
+# ------------------------------------------------------------------------------
+@contextlib.contextmanager
+def raw_input_mode():
+    """Puts the terminal into a mode where single keypresses can be read
+    immediately, with no Enter needed and no local echo. No-op on Windows,
+    where msvcrt.getch() already behaves this way natively."""
+    if _REAL_WINDOWS:
+        yield
+        return
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _read_key_unix() -> str:
+    # Read raw bytes straight off the file descriptor rather than through
+    # sys.stdin: TextIOWrapper does its own internal read-ahead buffering,
+    # which would hide already-arrived bytes from the select() peek below.
+    fd = sys.stdin.fileno()
+    ch = os.read(fd, 1).decode(errors="replace")
+    if ch == "\x03":  # Ctrl-C
+        raise KeyboardInterrupt
+    if ch in ("\r", "\n"):
+        return "ENTER"
+    if ch == " ":
+        return "SPACE"
+    if ch in ("q", "Q"):
+        return "QUIT"
+    if ch == "\x1b":
+        # Could be a lone Escape keypress or the start of a multi-byte
+        # arrow-key sequence: ESC [ A/B (most terminals) or ESC O A/B
+        # ("application cursor keys" mode, used by some terminals/TERM
+        # settings). Peek ahead to tell a lone Escape from a sequence.
+        # 150ms is generous enough to absorb latency from slower
+        # terminals/remote sessions while still feeling instant on a
+        # real Escape press.
+        ESC_WAIT = 0.15
+        if select.select([fd], [], [], ESC_WAIT)[0]:
+            ch2 = os.read(fd, 1).decode(errors="replace")
+            if ch2 in ("[", "O") and select.select([fd], [], [], ESC_WAIT)[0]:
+                ch3 = os.read(fd, 1).decode(errors="replace")
+                return {"A": "UP", "B": "DOWN"}.get(ch3, "OTHER")
+            return "OTHER"
+        return "QUIT"
+    return "OTHER"
+
+
+def _read_key_windows() -> str:
+    import msvcrt  # only importable on Windows
+
+    ch = msvcrt.getch()
+    if ch == b"\x03":  # Ctrl-C
+        raise KeyboardInterrupt
+    if ch in (b"\r", b"\n"):
+        return "ENTER"
+    if ch == b" ":
+        return "SPACE"
+    if ch in (b"q", b"Q"):
+        return "QUIT"
+    if ch == b"\x1b":
+        return "QUIT"
+    if ch in (b"\x00", b"\xe0"):  # extended-key prefix
+        ch2 = msvcrt.getch()
+        return {b"H": "UP", b"P": "DOWN"}.get(ch2, "OTHER")
+    return "OTHER"
+
+
+def read_key() -> str:
+    """Blocks for one logical keypress. Returns one of:
+    'UP', 'DOWN', 'SPACE', 'ENTER', 'QUIT', or 'OTHER' for anything else."""
+    return _read_key_windows() if _REAL_WINDOWS else _read_key_unix()
+
+
+def checkbox_menu(items: list[str]) -> list[int] | None:
+    """Arrow-key + space multi-select menu. Up/Down moves the cursor,
+    Space toggles the highlighted item, Enter runs everything checked,
+    and 'q'/Esc quits without running anything.
+
+    Returns the list of selected indices, or None if the user quit."""
+    selected = [False] * len(items)
+    cursor = 0
+
+    def render() -> None:
+        clear_screen()
+        print()
+        render_intro_box()
+        print()
+        print(
+            f" {C.BOLD}SELECT OPTION(S){C.RESET} "
+            f"{C.GRAY}(\u2191/\u2193 move \u00b7 space toggle \u00b7 enter run \u00b7 q quit):{C.RESET}"
+        )
+        print()
+        for i, label in enumerate(items):
+            checked = f"{C.GREEN}[x]{C.RESET}" if selected[i] else f"{C.GRAY}[ ]{C.RESET}"
+            if i == cursor:
+                pointer = f"{C.PURPLE}{ICON_PROMPT}{C.RESET}"
+                label_out = f"{C.BOLD}{label}{C.RESET}"
+            else:
+                pointer = "  "
+                label_out = label
+            print(f"  {pointer} {checked} {label_out}")
+        print()
+
+    with raw_input_mode():
+        if _TTY:
+            sys.stdout.write("\033[?25l")  # hide cursor
+            sys.stdout.flush()
+        try:
+            while True:
+                render()
+                try:
+                    key = read_key()
+                except KeyboardInterrupt:
+                    return None
+                if key == "UP":
+                    cursor = (cursor - 1) % len(items)
+                elif key == "DOWN":
+                    cursor = (cursor + 1) % len(items)
+                elif key == "SPACE":
+                    selected[cursor] = not selected[cursor]
+                elif key == "ENTER":
+                    chosen = [i for i, s in enumerate(selected) if s]
+                    if chosen:
+                        return chosen
+                    # Nothing checked yet — treat Enter as "run just the
+                    # highlighted item" so a single-choice pick doesn't
+                    # need an extra space press.
+                    return [cursor]
+                elif key == "QUIT":
+                    return None
+        finally:
+            if _TTY:
+                sys.stdout.write("\033[?25h")  # restore cursor
+                sys.stdout.flush()
+
+
+# ------------------------------------------------------------------------------
 # INTERACTIVE MENU & MAIN ENTRY POINT
 # ------------------------------------------------------------------------------
 MENU_ITEMS: list[tuple[str, Callable[[], None]]] = [
@@ -532,52 +689,31 @@ if IS_WINDOWS:
 
 
 def interactive_menu() -> bool:
-    """Returns False when the user chooses to exit."""
+    """Shows the checkbox menu, runs whatever was selected, and returns
+    False when the user chose to quit."""
+    labels = [label for label, _ in MENU_ITEMS]
+    chosen = checkbox_menu(labels)
+
     clear_screen()
     print()
     render_intro_box()
     print()
-    print(f" {C.BOLD}SELECT OPTION(S){C.RESET} {C.GRAY}(space-separated, e.g. '1 2 4'):{C.RESET}")
-    print()
-    for i, (label, _) in enumerate(MENU_ITEMS, start=1):
-        print(f"  {C.CYAN}[{i}]{C.RESET} {C.BOLD}{label}{C.RESET}")
-    exit_num = len(MENU_ITEMS) + 1
-    print(f"  {C.CYAN}[{exit_num}]{C.RESET} {C.GRAY}Exit{C.RESET}")
-    print()
 
-    try:
-        choices = input(f" {C.PURPLE}{ICON_PROMPT[0]}{C.CYAN}{ICON_PROMPT[1]}{C.RESET} Choose: ").strip()
-    except (EOFError, KeyboardInterrupt):
+    if chosen is None:
+        log_info("Exiting AVA. Have a productive day!")
         print()
         return False
 
-    print()
+    for i in chosen:
+        _, handler = MENU_ITEMS[i]
+        handler()
+        print()
 
-    if not choices:
-        return True
-
-    ran_operation = False
-    for choice in choices.split():
-        if choice.lower() in (str(exit_num), "q", "exit"):
-            log_info("Exiting AVA. Have a productive day!")
-            print()
-            return False
-
-        if choice.isdigit() and 1 <= int(choice) <= len(MENU_ITEMS):
-            _, handler = MENU_ITEMS[int(choice) - 1]
-            handler()
-            print()
-            ran_operation = True
-        else:
-            log_error(f"Invalid selection: '{choice}'")
-            print()
-
-    if ran_operation:
-        try:
-            input(f" {C.GRAY}Press Enter to return to the menu...{C.RESET}")
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return False
+    try:
+        input(f" {C.GRAY}Press Enter to return to the menu...{C.RESET}")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
 
     return True
 
