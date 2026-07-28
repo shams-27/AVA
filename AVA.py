@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-AVA_VERSION = "1.0.0"
+AVA_VERSION = "1.1.0"
 VSCODE_PROFILE_DEFAULT_URL = (
     "https://github.com/shams-27/VS-Code-Profile/blob/main/shams_vscode.code-profile"
 )
@@ -339,7 +339,7 @@ def run_with_status(label: str, cmd: list[str] | str, shell: bool = False) -> bo
         return False
 
     box_width = 64
-    inner_width = box_width - 8
+    inner_width = box_width - 7
     margin = ui_margin(box_width)
     top_dashes = BOX_H * max(1, box_width - len(label) - 6)
     bot_dashes = BOX_H * (box_width - 3)
@@ -418,6 +418,10 @@ def ensure_privileges() -> list[str] | None:
         return None
 
     if shutil.which("sudo"):
+        # If sudo already has a cached, unexpired auth timestamp, this
+        # succeeds without showing a password prompt at all.
+        already_cached = subprocess.run(["sudo", "-n", "-v"], capture_output=True).returncode == 0
+
         # Prime the sudo timestamp up front so later calls don't interrupt
         # a running status box with a password prompt.
         try:
@@ -425,6 +429,14 @@ def ensure_privileges() -> list[str] | None:
         except subprocess.CalledProcessError:
             log_error("Sudo authentication failed.")
             return None
+
+        # sudo prints its own "[sudo] password for USER:" prompt straight
+        # to the terminal; once authenticated, erase that line so it
+        # doesn't linger in AVA's output.
+        if _TTY and not already_cached:
+            sys.stdout.write("\033[1A\033[2K")
+            sys.stdout.flush()
+
         return ["sudo"]
 
     log_error("Root privileges or 'sudo' are required for this action.")
