@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-AVA_VERSION = "0.12.0"
+AVA_VERSION = "1.0.0"
 VSCODE_PROFILE_DEFAULT_URL = (
     "https://github.com/shams-27/VS-Code-Profile/blob/main/shams_vscode.code-profile"
 )
@@ -115,16 +115,16 @@ def _detect_unicode_support() -> bool:
 UNICODE_OK = _detect_unicode_support()
 
 if UNICODE_OK:
-    ICON_SUCCESS = "\u2714"
-    ICON_WARN = "\u26a0"
-    ICON_ERROR = "\u2716"
-    ICON_BOLT = "\u26a1"
+    ICON_SUCCESS = "\u2713"
+    ICON_WARN = "\u25b2"
+    ICON_ERROR = "\u2715"
+    ICON_BOLT = "\u25cf"
     ICON_PROMPT = "\u276f\u276f"
     EM_DASH = "\u2014"
     ARROW_UP = "\u2191"
     ARROW_DOWN = "\u2193"
     DOT = "\u00b7"
-    BOLT_IS_WIDE = True  # ⚡ renders wider than one column in most terminals
+    BOLT_IS_WIDE = False  # ● is a normal single-width glyph in most terminals
     BOX_TL, BOX_TR, BOX_BL, BOX_BR = "\u256d", "\u256e", "\u2570", "\u256f"
     BOX_ML, BOX_MR = "\u251c", "\u2524"
     BOX_H, BOX_V = "\u2500", "\u2502"
@@ -148,19 +148,19 @@ else:
 # Logging helpers
 # ------------------------------------------------------------------------------
 def log_info(msg: str) -> None:
-    print(f" {C.CYAN}i{C.RESET}  {msg}")
+    print(f"{ui_margin()} {C.CYAN}i{C.RESET}  {msg}")
 
 
 def log_success(msg: str) -> None:
-    print(f" {C.GREEN}{ICON_SUCCESS}{C.RESET}  {msg}")
+    print(f"{ui_margin()} {C.GREEN}{ICON_SUCCESS}{C.RESET}  {msg}")
 
 
 def log_warn(msg: str) -> None:
-    print(f" {C.YELLOW}{ICON_WARN}{C.RESET}  {msg}", file=sys.stderr)
+    print(f"{ui_margin()} {C.YELLOW}{ICON_WARN}{C.RESET}  {msg}", file=sys.stderr)
 
 
 def log_error(msg: str) -> None:
-    print(f" {C.RED}{ICON_ERROR}{C.RESET}  {msg}", file=sys.stderr)
+    print(f"{ui_margin()} {C.RED}{ICON_ERROR}{C.RESET}  {msg}", file=sys.stderr)
 
 
 def clear_screen() -> None:
@@ -172,11 +172,25 @@ def clear_screen() -> None:
 
 
 # ------------------------------------------------------------------------------
+# Horizontal centering. Every box/line in the UI is drawn against a nominal
+# 64-column width; this computes the left margin needed to center that width
+# in the current terminal, recomputed on every call so it tracks resizes.
+# ------------------------------------------------------------------------------
+def _term_width() -> int:
+    return shutil.get_terminal_size(fallback=(80, 24)).columns
+
+
+def ui_margin(width: int = 64) -> str:
+    return " " * max(0, (_term_width() - width) // 2)
+
+
+# ------------------------------------------------------------------------------
 # Dynamic header box (mirrors render_intro_box from the bash version)
 # ------------------------------------------------------------------------------
 def render_intro_box() -> None:
     box_width = 64
     inner_width = box_width - 2
+    margin = ui_margin(box_width)
 
     top = BOX_TL + BOX_H * inner_width + BOX_TR
     bot = BOX_BL + BOX_H * inner_width + BOX_BR
@@ -185,13 +199,13 @@ def render_intro_box() -> None:
     wide_adjust = 1 if BOLT_IS_WIDE else 0
     pad1 = " " * max(0, inner_width - len(line1_plain) - wide_adjust)
 
-    print(f"{C.CYAN}{top}{C.RESET}")
+    print(f"{margin}{C.CYAN}{top}{C.RESET}")
     print(
-        f"{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
+        f"{margin}{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
         f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
         f"{pad1}{C.CYAN}{BOX_V}{C.RESET}"
     )
-    print(f"{C.CYAN}{bot}{C.RESET}")
+    print(f"{margin}{C.CYAN}{bot}{C.RESET}")
 
 
 # ------------------------------------------------------------------------------
@@ -217,6 +231,7 @@ def _tool_availability() -> list[tuple[str, bool]]:
 def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> None:
     box_width = 64
     inner_width = box_width - 2
+    margin = ui_margin(box_width)
 
     top = BOX_TL + BOX_H * inner_width + BOX_TR
     mid = BOX_ML + BOX_H * inner_width + BOX_MR
@@ -244,18 +259,18 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
         header_line_plain = f"  {header_plain} {hint_plain}"
     header_pad = " " * max(0, inner_width - len(header_line_plain))
 
-    print(f"{C.CYAN}{top}{C.RESET}")
+    print(f"{margin}{C.CYAN}{top}{C.RESET}")
     print(
-        f"{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
+        f"{margin}{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
         f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
         f"{title_pad}{C.CYAN}{BOX_V}{C.RESET}"
     )
-    print(f"{C.CYAN}{mid}{C.RESET}")
+    print(f"{margin}{C.CYAN}{mid}{C.RESET}")
     print(
-        f"{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{header_plain}{C.RESET} "
+        f"{margin}{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{header_plain}{C.RESET} "
         f"{C.GRAY}{hint_plain}{C.RESET}{header_pad}{C.CYAN}{BOX_V}{C.RESET}"
     )
-    print(f"{C.CYAN}{mid}{C.RESET}")
+    print(f"{margin}{C.CYAN}{mid}{C.RESET}")
 
     for i, label in enumerate(items):
         is_cursor = i == cursor
@@ -265,7 +280,7 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
         # Right-side indicator: only shown for items we actually have an
         # availability check for, and only when that tool is missing.
         is_missing = label in missing_tools
-        indicator_plain = f" {ICON_WARN} not installed" if is_missing else ""
+        indicator_plain = f" {ICON_WARN}" if is_missing else ""
 
         row_plain = f"  {pointer_plain} {checked_plain} {label}{indicator_plain}"
         if len(row_plain) > inner_width:
@@ -278,15 +293,15 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
         checked_colored = f"{C.GREEN}[x]{C.RESET}" if selected[i] else f"{C.GRAY}[ ]{C.RESET}"
         label_colored = f"{C.BOLD}{label}{C.RESET}" if is_cursor else label
         indicator_colored = (
-            f" {C.YELLOW}{ICON_WARN} not installed{C.RESET}" if is_missing else ""
+            f" {C.YELLOW}{ICON_WARN}{C.RESET}" if is_missing else ""
         )
 
         print(
-            f"{C.CYAN}{BOX_V}{C.RESET}  {pointer_colored} {checked_colored} {label_colored}"
+            f"{margin}{C.CYAN}{BOX_V}{C.RESET}  {pointer_colored} {checked_colored} {label_colored}"
             f"{indicator_colored}{pad}{C.CYAN}{BOX_V}{C.RESET}"
         )
 
-    print(f"{C.CYAN}{bot}{C.RESET}")
+    print(f"{margin}{C.CYAN}{bot}{C.RESET}")
 
 
 # ------------------------------------------------------------------------------
@@ -311,6 +326,7 @@ def run_with_status(label: str, cmd: list[str] | str, shell: bool = False) -> bo
 
     box_width = 64
     inner_width = box_width - 8
+    margin = ui_margin(box_width)
     top_dashes = BOX_H * max(1, box_width - len(label) - 6)
     bot_dashes = BOX_H * (box_width - 3)
 
@@ -333,9 +349,9 @@ def run_with_status(label: str, cmd: list[str] | str, shell: bool = False) -> bo
                 sys.stdout.write("\033[3A")
             first_render = False
 
-            sys.stdout.write(f"\r\033[K {C.CYAN}{BOX_TL}{BOX_H}{C.RESET} {C.BOLD}{C.PURPLE}{label}{C.RESET} {C.CYAN}{top_dashes}{BOX_TR}{C.RESET}\n")
-            sys.stdout.write(f"\r\033[K {C.CYAN}{BOX_V}{C.RESET} {C.CYAN}{ICON_BOLT}{C.RESET} {status_line:<{inner_width}} {C.CYAN}{BOX_V}{C.RESET}\n")
-            sys.stdout.write(f"\r\033[K {C.CYAN}{BOX_BL}{bot_dashes}{BOX_BR}{C.RESET}\n")
+            sys.stdout.write(f"\r\033[K{margin} {C.CYAN}{BOX_TL}{BOX_H}{C.RESET} {C.BOLD}{C.PURPLE}{label}{C.RESET} {C.CYAN}{top_dashes}{BOX_TR}{C.RESET}\n")
+            sys.stdout.write(f"\r\033[K{margin} {C.CYAN}{BOX_V}{C.RESET} {C.CYAN}{ICON_BOLT}{C.RESET} {status_line:<{inner_width}} {C.CYAN}{BOX_V}{C.RESET}\n")
+            sys.stdout.write(f"\r\033[K{margin} {C.CYAN}{BOX_BL}{bot_dashes}{BOX_BR}{C.RESET}\n")
             sys.stdout.flush()
         time.sleep(0.08)
 
@@ -346,16 +362,16 @@ def run_with_status(label: str, cmd: list[str] | str, shell: bool = False) -> bo
         sys.stdout.write("\033[3A\033[2K\n\033[2K\n\033[2K\033[2A\r")
         sys.stdout.flush()
     elif not _TTY:
-        print(f" {label}...", end=" ")
+        print(f"{margin} {label}...", end=" ")
 
     if exit_code != 0:
         log_error(f"{label} failed.")
         log_file.seek(0)
         tail = [ln for ln in log_file.readlines() if ln.strip()][-4:]
         if tail:
-            print(f"    {C.GRAY}Error details:{C.RESET}")
+            print(f"{margin}    {C.GRAY}Error details:{C.RESET}")
             for ln in tail:
-                print(f"    {ln.rstrip()}")
+                print(f"{margin}    {ln.rstrip()}")
         log_file.close()
         return False
 
@@ -450,7 +466,7 @@ def _run_python_task(label: str, fn) -> bool:
     i = 0
     while t.is_alive():
         if _TTY:
-            sys.stdout.write(f"\r {C.CYAN}{spin[i % len(spin)]}{C.RESET} {label}...")
+            sys.stdout.write(f"\r{ui_margin()} {C.CYAN}{spin[i % len(spin)]}{C.RESET} {label}...")
             sys.stdout.flush()
             i += 1
         time.sleep(0.08)
@@ -494,7 +510,7 @@ def configure_openjdk() -> None:
             ["java", "-version"], capture_output=True, text=True
         ).stderr.splitlines()
         if version:
-            print(f"    {C.GRAY}Active Version:{C.RESET} {C.DIM}{version[0]}{C.RESET}")
+            print(f"{ui_margin()}    {C.GRAY}Active Version:{C.RESET} {C.DIM}{version[0]}{C.RESET}")
         log_success("Skipping installation.")
         return
 
@@ -537,10 +553,10 @@ def configure_nodejs() -> None:
     if shutil.which("node"):
         log_info("Node.js is already installed on this system.")
         node_v = subprocess.run(["node", "-v"], capture_output=True, text=True).stdout.strip()
-        print(f"    {C.GRAY}Node Version:{C.RESET} {C.DIM}{node_v}{C.RESET}")
+        print(f"{ui_margin()}    {C.GRAY}Node Version:{C.RESET} {C.DIM}{node_v}{C.RESET}")
         if shutil.which("npm"):
             npm_v = subprocess.run(["npm", "-v"], capture_output=True, text=True, shell=IS_WINDOWS).stdout.strip()
-            print(f"    {C.GRAY}npm Version:{C.RESET}  {C.DIM}{npm_v}{C.RESET}")
+            print(f"{ui_margin()}    {C.GRAY}npm Version:{C.RESET}  {C.DIM}{npm_v}{C.RESET}")
         log_success("Skipping installation.")
         return
 
@@ -583,7 +599,7 @@ def configure_git() -> None:
     if shutil.which("git"):
         log_info("Git is already installed on this system.")
         git_v = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout.strip()
-        print(f"    {C.GRAY}Git Version:{C.RESET}  {C.DIM}{git_v}{C.RESET}")
+        print(f"{ui_margin()}    {C.GRAY}Git Version:{C.RESET}  {C.DIM}{git_v}{C.RESET}")
         log_success("Skipping installation.")
         return
 
@@ -626,10 +642,10 @@ def configure_rust() -> None:
     if shutil.which("rustc"):
         log_info("Rust is already installed on this system.")
         rustc_v = subprocess.run(["rustc", "--version"], capture_output=True, text=True).stdout.strip()
-        print(f"    {C.GRAY}Rust Version:{C.RESET}  {C.DIM}{rustc_v}{C.RESET}")
+        print(f"{ui_margin()}    {C.GRAY}Rust Version:{C.RESET}  {C.DIM}{rustc_v}{C.RESET}")
         if shutil.which("cargo"):
             cargo_v = subprocess.run(["cargo", "--version"], capture_output=True, text=True).stdout.strip()
-            print(f"    {C.GRAY}Cargo Version:{C.RESET} {C.DIM}{cargo_v}{C.RESET}")
+            print(f"{ui_margin()}    {C.GRAY}Cargo Version:{C.RESET} {C.DIM}{cargo_v}{C.RESET}")
         log_success("Skipping installation.")
         return
 
@@ -697,7 +713,7 @@ def configure_gcc() -> None:
         log_info("GCC is already installed on this system.")
         version = subprocess.run(["gcc", "--version"], capture_output=True, text=True).stdout.splitlines()
         if version:
-            print(f"    {C.GRAY}Active Version:{C.RESET} {C.DIM}{version[0]}{C.RESET}")
+            print(f"{ui_margin()}    {C.GRAY}Active Version:{C.RESET} {C.DIM}{version[0]}{C.RESET}")
         log_success("Skipping installation.")
         return
 
@@ -897,7 +913,7 @@ def interactive_menu() -> bool:
         print()
 
     try:
-        input(f" {C.GRAY}Press Enter to return to the menu...{C.RESET}")
+        input(f"{ui_margin()} {C.GRAY}Press Enter to return to the menu...{C.RESET}")
     except (EOFError, KeyboardInterrupt):
         print()
         return False
@@ -916,7 +932,7 @@ def main() -> None:
             "Windows-only commands (winget/choco/powershell) will fail cleanly since "
             f"they don't actually exist here {EM_DASH} this only exercises the menu/branching logic."
         )
-        input(f" {C.GRAY}Press Enter to continue...{C.RESET}")
+        input(f"{ui_margin()} {C.GRAY}Press Enter to continue...{C.RESET}")
 
     try:
         while interactive_menu():
