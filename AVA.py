@@ -121,6 +121,9 @@ if UNICODE_OK:
     ICON_BOLT = "\u26a1"
     ICON_PROMPT = "\u276f\u276f"
     EM_DASH = "\u2014"
+    ARROW_UP = "\u2191"
+    ARROW_DOWN = "\u2193"
+    DOT = "\u00b7"
     BOLT_IS_WIDE = True  # ⚡ renders wider than one column in most terminals
     BOX_TL, BOX_TR, BOX_BL, BOX_BR = "\u256d", "\u256e", "\u2570", "\u256f"
     BOX_ML, BOX_MR = "\u251c", "\u2524"
@@ -132,6 +135,9 @@ else:
     ICON_BOLT = "*"
     ICON_PROMPT = ">>"
     EM_DASH = "-"
+    ARROW_UP = "^"
+    ARROW_DOWN = "v"
+    DOT = "-"
     BOLT_IS_WIDE = False
     BOX_TL, BOX_TR, BOX_BL, BOX_BR = "+", "+", "+", "+"
     BOX_ML, BOX_MR = "+", "+"
@@ -173,15 +179,11 @@ def render_intro_box() -> None:
     inner_width = box_width - 2
 
     top = BOX_TL + BOX_H * inner_width + BOX_TR
-    mid = BOX_ML + BOX_H * inner_width + BOX_MR
     bot = BOX_BL + BOX_H * inner_width + BOX_BR
 
     line1_plain = f"  {ICON_BOLT} AVA {EM_DASH} Terminal Assistant (v{AVA_VERSION})"
     wide_adjust = 1 if BOLT_IS_WIDE else 0
     pad1 = " " * max(0, inner_width - len(line1_plain) - wide_adjust)
-    line2_str = "Automating your developer environment configurations."
-    line2_plain = f"  {line2_str}"
-    pad2 = " " * max(0, inner_width - len(line2_plain))
 
     print(f"{C.CYAN}{top}{C.RESET}")
     print(
@@ -189,8 +191,101 @@ def render_intro_box() -> None:
         f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
         f"{pad1}{C.CYAN}{BOX_V}{C.RESET}"
     )
+    print(f"{C.CYAN}{bot}{C.RESET}")
+
+
+# ------------------------------------------------------------------------------
+# Tool-availability check — powers the "not installed" indicator drawn next
+# to each list item in the menu box, so the user can see at a glance which
+# tools are missing on this host before picking options.
+# ------------------------------------------------------------------------------
+def _tool_availability() -> list[tuple[str, bool]]:
+    checks = [
+        ("OpenJDK", shutil.which("java") is not None),
+        ("Node.js & npm", shutil.which("node") is not None),
+        ("Git", shutil.which("git") is not None),
+        ("GCC", shutil.which("gcc") is not None),
+        ("Rust", shutil.which("rustc") is not None),
+    ]
+    return checks
+
+
+# ------------------------------------------------------------------------------
+# Combined title + option-list box — one continuous frame instead of two
+# stacked boxes, used for the live interactive selection screen.
+# ------------------------------------------------------------------------------
+def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> None:
+    box_width = 64
+    inner_width = box_width - 2
+
+    top = BOX_TL + BOX_H * inner_width + BOX_TR
+    mid = BOX_ML + BOX_H * inner_width + BOX_MR
+    bot = BOX_BL + BOX_H * inner_width + BOX_BR
+
+    # --- Title row ---
+    title_plain = f"  {ICON_BOLT} AVA {EM_DASH} Terminal Assistant (v{AVA_VERSION})"
+    wide_adjust = 1 if BOLT_IS_WIDE else 0
+    title_pad = " " * max(0, inner_width - len(title_plain) - wide_adjust)
+
+    # --- Per-item tool-availability lookup, used to draw an inline
+    # "not installed" indicator on the right edge of each list item below
+    # instead of a separate summary row. ---
+    missing_tools = {name for name, ok in _tool_availability() if not ok}
+
+    # --- Header/hint row ---
+    header_plain = "SELECT OPTION(S)"
+    hint_plain = f"({ARROW_UP}{ARROW_DOWN} move {DOT} space toggle {DOT} enter {DOT} q quit)"
+    header_line_plain = f"  {header_plain} {hint_plain}"
+    if len(header_line_plain) > inner_width:
+        # Defensive: trim the hint (not the title) if it ever overflows,
+        # so the right-hand border always lines up.
+        overflow = len(header_line_plain) - inner_width
+        hint_plain = hint_plain[: max(0, len(hint_plain) - overflow - 1)] + ")"
+        header_line_plain = f"  {header_plain} {hint_plain}"
+    header_pad = " " * max(0, inner_width - len(header_line_plain))
+
+    print(f"{C.CYAN}{top}{C.RESET}")
+    print(
+        f"{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
+        f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
+        f"{title_pad}{C.CYAN}{BOX_V}{C.RESET}"
+    )
     print(f"{C.CYAN}{mid}{C.RESET}")
-    print(f"{C.CYAN}{BOX_V}{C.RESET}  {C.GRAY}{line2_str}{C.RESET}{pad2}{C.CYAN}{BOX_V}{C.RESET}")
+    print(
+        f"{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{header_plain}{C.RESET} "
+        f"{C.GRAY}{hint_plain}{C.RESET}{header_pad}{C.CYAN}{BOX_V}{C.RESET}"
+    )
+    print(f"{C.CYAN}{mid}{C.RESET}")
+
+    for i, label in enumerate(items):
+        is_cursor = i == cursor
+        pointer_plain = ICON_PROMPT if is_cursor else "  "
+        checked_plain = "[x]" if selected[i] else "[ ]"
+
+        # Right-side indicator: only shown for items we actually have an
+        # availability check for, and only when that tool is missing.
+        is_missing = label in missing_tools
+        indicator_plain = f" {ICON_WARN} not installed" if is_missing else ""
+
+        row_plain = f"  {pointer_plain} {checked_plain} {label}{indicator_plain}"
+        if len(row_plain) > inner_width:
+            overflow = len(row_plain) - inner_width
+            label = label[: max(0, len(label) - overflow - 3)] + "..."
+            row_plain = f"  {pointer_plain} {checked_plain} {label}{indicator_plain}"
+        pad = " " * max(0, inner_width - len(row_plain))
+
+        pointer_colored = f"{C.PURPLE}{ICON_PROMPT}{C.RESET}" if is_cursor else "  "
+        checked_colored = f"{C.GREEN}[x]{C.RESET}" if selected[i] else f"{C.GRAY}[ ]{C.RESET}"
+        label_colored = f"{C.BOLD}{label}{C.RESET}" if is_cursor else label
+        indicator_colored = (
+            f" {C.YELLOW}{ICON_WARN} not installed{C.RESET}" if is_missing else ""
+        )
+
+        print(
+            f"{C.CYAN}{BOX_V}{C.RESET}  {pointer_colored} {checked_colored} {label_colored}"
+            f"{indicator_colored}{pad}{C.CYAN}{BOX_V}{C.RESET}"
+        )
+
     print(f"{C.CYAN}{bot}{C.RESET}")
 
 
@@ -482,32 +577,174 @@ def configure_nodejs() -> None:
 
 
 # ------------------------------------------------------------------------------
-# FEATURE: Configure GCC (Windows only)
-# Hands off to an external PowerShell script with stdio inherited directly,
-# so its interactive UI draws normally; control returns once it exits.
+# FEATURE: Configure Git
+# ------------------------------------------------------------------------------
+def configure_git() -> None:
+    if shutil.which("git"):
+        log_info("Git is already installed on this system.")
+        git_v = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout.strip()
+        print(f"    {C.GRAY}Git Version:{C.RESET}  {C.DIM}{git_v}{C.RESET}")
+        log_success("Skipping installation.")
+        return
+
+    prefix = ensure_privileges()
+    if prefix is None:
+        return
+
+    pm = detect_package_manager()
+    if pm is None:
+        log_error("Could not detect a supported package manager.")
+        return
+    log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
+
+    install_cmds: dict[str, list[list[str]]] = {
+        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "git"]],
+        "dnf": [prefix + ["dnf", "install", "-y", "git"]],
+        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "git"]],
+        "zypper": [prefix + ["zypper", "install", "-y", "git"]],
+        "apk": [prefix + ["apk", "add", "git"]],
+        "winget": [["winget", "install", "-e", "--id", "Git.Git", "--silent",
+                     "--accept-package-agreements", "--accept-source-agreements"]],
+        "choco": [prefix + ["choco", "install", "git", "-y"]],
+    }
+
+    ok = True
+    for cmd in install_cmds[pm]:
+        if not run_with_status("Installing Git", cmd):
+            ok = False
+            break
+
+    if ok:
+        log_success("Git configured successfully!")
+        log_info("Open a new terminal so PATH changes take effect if 'git' isn't found yet.")
+
+
+# ------------------------------------------------------------------------------
+# FEATURE: Configure Rust (rustc & cargo)
+# ------------------------------------------------------------------------------
+def configure_rust() -> None:
+    if shutil.which("rustc"):
+        log_info("Rust is already installed on this system.")
+        rustc_v = subprocess.run(["rustc", "--version"], capture_output=True, text=True).stdout.strip()
+        print(f"    {C.GRAY}Rust Version:{C.RESET}  {C.DIM}{rustc_v}{C.RESET}")
+        if shutil.which("cargo"):
+            cargo_v = subprocess.run(["cargo", "--version"], capture_output=True, text=True).stdout.strip()
+            print(f"    {C.GRAY}Cargo Version:{C.RESET} {C.DIM}{cargo_v}{C.RESET}")
+        log_success("Skipping installation.")
+        return
+
+    prefix = ensure_privileges()
+    if prefix is None:
+        return
+
+    pm = detect_package_manager()
+    if pm is None:
+        log_error("Could not detect a supported package manager.")
+        return
+    log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
+
+    install_cmds: dict[str, list[list[str]]] = {
+        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "rustc", "cargo"]],
+        "dnf": [prefix + ["dnf", "install", "-y", "rust", "cargo"]],
+        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "rust"]],
+        "zypper": [prefix + ["zypper", "install", "-y", "rust", "cargo"]],
+        "apk": [prefix + ["apk", "add", "rust", "cargo"]],
+        "winget": [["winget", "install", "-e", "--id", "Rustlang.Rustup", "--silent",
+                     "--accept-package-agreements", "--accept-source-agreements"]],
+        "choco": [prefix + ["choco", "install", "rust", "-y"]],
+    }
+
+    ok = True
+    for cmd in install_cmds[pm]:
+        if not run_with_status("Installing Rust", cmd):
+            ok = False
+            break
+
+    if ok:
+        log_success("Rust configured successfully!")
+        log_info("Open a new terminal so PATH changes take effect if 'rustc' isn't found yet.")
+
+
+# ------------------------------------------------------------------------------
+# FEATURE: Configure GCC
+# Windows hands off to an external PowerShell script with stdio inherited
+# directly, so its interactive UI draws normally; control returns once it
+# exits. macOS triggers the native Xcode Command Line Tools installer (also
+# an external GUI handoff). Linux installs via the detected package manager.
 # ------------------------------------------------------------------------------
 def configure_gcc() -> None:
-    if not IS_WINDOWS:
-        log_error("Configure GCC is only available on Windows.")
+    if IS_WINDOWS:
+        if not shutil.which("powershell") and not shutil.which("pwsh"):
+            log_error("PowerShell was not found on this system.")
+            return
+
+        ps_exe = "pwsh" if shutil.which("pwsh") else "powershell"
+        ps_command = f"irm {GCC_SCRIPT_URL} | iex"
+
+        log_info("Launching GCC configuration script...")
+        print()
+        try:
+            subprocess.run([ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_command])
+        except FileNotFoundError:
+            log_error("PowerShell was not found on this system.")
+            return
+
+        print()
+        log_success(f"GCC configuration script finished {EM_DASH} back in AVA.")
         return
 
-    if not shutil.which("powershell") and not shutil.which("pwsh"):
-        log_error("PowerShell was not found on this system.")
+    if shutil.which("gcc"):
+        log_info("GCC is already installed on this system.")
+        version = subprocess.run(["gcc", "--version"], capture_output=True, text=True).stdout.splitlines()
+        if version:
+            print(f"    {C.GRAY}Active Version:{C.RESET} {C.DIM}{version[0]}{C.RESET}")
+        log_success("Skipping installation.")
         return
 
-    ps_exe = "pwsh" if shutil.which("pwsh") else "powershell"
-    ps_command = f"irm {GCC_SCRIPT_URL} | iex"
+    if IS_MACOS:
+        if not shutil.which("xcode-select"):
+            log_error("xcode-select was not found on this system.")
+            return
 
-    log_info("Launching GCC configuration script...")
-    print()
-    try:
-        subprocess.run([ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_command])
-    except FileNotFoundError:
-        log_error("PowerShell was not found on this system.")
+        log_info("Launching Xcode Command Line Tools installer...")
+        print()
+        try:
+            subprocess.run(["xcode-select", "--install"])
+        except FileNotFoundError:
+            log_error("xcode-select was not found on this system.")
+            return
+
+        print()
+        log_success(f"Xcode Command Line Tools installer launched {EM_DASH} follow the on-screen prompt to finish.")
         return
 
-    print()
-    log_success(f"GCC configuration script finished {EM_DASH} back in AVA.")
+    prefix = ensure_privileges()
+    if prefix is None:
+        return
+
+    pm = detect_package_manager()
+    if pm is None:
+        log_error("Could not detect a supported package manager.")
+        return
+    log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
+
+    install_cmds: dict[str, list[list[str]]] = {
+        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "build-essential"]],
+        "dnf": [prefix + ["dnf", "groupinstall", "-y", "Development Tools"]],
+        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "base-devel"]],
+        "zypper": [prefix + ["zypper", "install", "-y", "-t", "pattern", "devel_basis"]],
+        "apk": [prefix + ["apk", "add", "build-base"]],
+    }
+
+    ok = True
+    for cmd in install_cmds[pm]:
+        if not run_with_status("Installing GCC", cmd):
+            ok = False
+            break
+
+    if ok:
+        log_success("GCC configured successfully!")
+        log_info("Open a new terminal so PATH changes take effect if 'gcc' isn't found yet.")
 
 
 # ------------------------------------------------------------------------------
@@ -592,22 +829,7 @@ def checkbox_menu(items: list[str]) -> list[int] | None:
     def render() -> None:
         clear_screen()
         print()
-        render_intro_box()
-        print()
-        print(
-            f" {C.BOLD}SELECT OPTION(S){C.RESET} "
-            f"{C.GRAY}(\u2191/\u2193 move \u00b7 space toggle \u00b7 enter run \u00b7 q quit):{C.RESET}"
-        )
-        print()
-        for i, label in enumerate(items):
-            checked = f"{C.GREEN}[x]{C.RESET}" if selected[i] else f"{C.GRAY}[ ]{C.RESET}"
-            if i == cursor:
-                pointer = f"{C.PURPLE}{ICON_PROMPT}{C.RESET}"
-                label_out = f"{C.BOLD}{label}{C.RESET}"
-            else:
-                pointer = "  "
-                label_out = label
-            print(f"  {pointer} {checked} {label_out}")
+        render_full_menu(items, selected, cursor)
         print()
 
     with raw_input_mode():
@@ -645,12 +867,13 @@ def checkbox_menu(items: list[str]) -> list[int] | None:
 # INTERACTIVE MENU & MAIN ENTRY POINT
 # ------------------------------------------------------------------------------
 MENU_ITEMS: list[tuple[str, Callable[[], None]]] = [
-    ("Download VS Code Profile", download_vscode_profile),
-    ("Configure OpenJDK", configure_openjdk),
-    ("Configure Node.js & npm", configure_nodejs),
+    ("VS Code Profile", download_vscode_profile),
+    ("OpenJDK", configure_openjdk),
+    ("Node.js & npm", configure_nodejs),
+    ("Git", configure_git),
+    ("GCC", configure_gcc),
+    ("Rust", configure_rust),
 ]
-if IS_WINDOWS:
-    MENU_ITEMS.append(("Configure GCC", configure_gcc))
 
 
 def interactive_menu() -> bool:
