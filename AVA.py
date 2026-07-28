@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -116,15 +117,15 @@ UNICODE_OK = _detect_unicode_support()
 
 if UNICODE_OK:
     ICON_SUCCESS = "\u2713"
-    ICON_WARN = "\u25b2"
+    ICON_WARN = "\u2022"
     ICON_ERROR = "\u2715"
-    ICON_BOLT = "\u25cf"
+    ICON_BOLT = "\u25c6"
     ICON_PROMPT = "\u276f\u276f"
     EM_DASH = "\u2014"
     ARROW_UP = "\u2191"
     ARROW_DOWN = "\u2193"
     DOT = "\u00b7"
-    BOLT_IS_WIDE = False  # ● is a normal single-width glyph in most terminals
+    BOLT_IS_WIDE = False  # ◆ is a normal single-width glyph in most terminals
     BOX_TL, BOX_TR, BOX_BL, BOX_BR = "\u256d", "\u256e", "\u2570", "\u256f"
     BOX_ML, BOX_MR = "\u251c", "\u2524"
     BOX_H, BOX_V = "\u2500", "\u2502"
@@ -212,16 +213,17 @@ def render_intro_box() -> None:
 # Tool-availability check — powers the "not installed" indicator drawn next
 # to each list item in the menu box, so the user can see at a glance which
 # tools are missing on this host before picking options.
+#
+# Derived automatically from MENU_ITEMS (defined further down) rather than a
+# separate hand-maintained list: a new menu item only needs check_bin set on
+# its MenuEntry, and it's covered here for free.
 # ------------------------------------------------------------------------------
 def _tool_availability() -> list[tuple[str, bool]]:
-    checks = [
-        ("OpenJDK", shutil.which("java") is not None),
-        ("Node.js & npm", shutil.which("node") is not None),
-        ("Git", shutil.which("git") is not None),
-        ("GCC", shutil.which("gcc") is not None),
-        ("Rust", shutil.which("rustc") is not None),
+    return [
+        (entry.name, shutil.which(entry.check_bin) is not None)
+        for entry in MENU_ITEMS
+        if entry.check_bin
     ]
-    return checks
 
 
 # ------------------------------------------------------------------------------
@@ -275,7 +277,7 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
     for i, label in enumerate(items):
         is_cursor = i == cursor
         pointer_plain = ICON_PROMPT if is_cursor else "  "
-        checked_plain = "[x]" if selected[i] else "[ ]"
+        checked_plain = "\u25cf" if selected[i] else "\u25cb"
 
         # Right-side indicator: only shown for items we actually have an
         # availability check for, and only when that tool is missing.
@@ -290,8 +292,8 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
         pad = " " * max(0, inner_width - len(row_plain))
 
         pointer_colored = f"{C.PURPLE}{ICON_PROMPT}{C.RESET}" if is_cursor else "  "
-        checked_colored = f"{C.GREEN}[x]{C.RESET}" if selected[i] else f"{C.GRAY}[ ]{C.RESET}"
-        label_colored = f"{C.BOLD}{label}{C.RESET}" if is_cursor else label
+        checked_colored = f"{C.GREEN}\u25cf{C.RESET}" if selected[i] else f"{C.GRAY}\u25cb{C.RESET}"
+        label_colored = label
         indicator_colored = (
             f" {C.YELLOW}{ICON_WARN}{C.RESET}" if is_missing else ""
         )
@@ -501,16 +503,48 @@ def _pm_display_name(pm: str) -> str:
 
 
 # ------------------------------------------------------------------------------
-# FEATURE: Configure OpenJDK
+# FEATURE: Generic CLI-tool installer, driven by TOOL_SPECS below.
+#
+# OpenJDK, Node.js & npm, Git, and Rust all followed the same shape (check
+# if installed -> print version -> elevate -> detect package manager -> run
+# per-PM install steps). To add a new tool to the menu:
+#   1. Add a ToolSpec entry to TOOL_SPECS.
+#   2. Add one line to MENU_ITEMS: _spec_entry("Your Tool Name").
+# The availability check, install flow, and menu wiring all follow from
+# that — no new function and nothing else to keep in sync.
 # ------------------------------------------------------------------------------
-def configure_openjdk() -> None:
-    if shutil.which("java"):
-        log_info("OpenJDK is already installed on this system.")
-        version = subprocess.run(
-            ["java", "-version"], capture_output=True, text=True
-        ).stderr.splitlines()
-        if version:
-            print(f"{ui_margin()}    {C.GRAY}Active Version:{C.RESET} {C.DIM}{version[0]}{C.RESET}")
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str                                    # Display name, e.g. "OpenJDK"
+    bin: str                                     # Binary checked for availability
+    version_cmd: list[str]                       # Command that prints the version
+    install_cmds: dict[str, list[list[str]]]     # Per-package-manager install steps (sudo/choco prefix applied automatically; omit for winget)
+    version_label: str = "Active Version"
+    version_on_stderr: bool = False              # e.g. `java -version` prints to stderr
+    secondary: tuple[str, str, list[str]] | None = None  # (bin, label, version_cmd) for a second binary installed alongside, e.g. npm/cargo
+
+
+def install_tool(spec: ToolSpec) -> None:
+    if shutil.which(spec.bin):
+        log_info(f"{spec.name} is already installed on this system.")
+        result = subprocess.run(spec.version_cmd, capture_output=True, text=True)
+        lines = (result.stderr if spec.version_on_stderr else result.stdout).splitlines()
+
+        label_w = len(spec.version_label)
+        if spec.secondary:
+            label_w = max(label_w, len(spec.secondary[1]))
+
+        if lines:
+            pad = " " * (label_w - len(spec.version_label) + 1)
+            print(f"{ui_margin()}    {C.GRAY}{spec.version_label}:{C.RESET}{pad}{C.DIM}{lines[0].strip()}{C.RESET}")
+
+        if spec.secondary:
+            sec_bin, sec_label, sec_cmd = spec.secondary
+            if shutil.which(sec_bin):
+                sec_v = subprocess.run(sec_cmd, capture_output=True, text=True, shell=IS_WINDOWS).stdout.strip()
+                pad = " " * (label_w - len(sec_label) + 1)
+                print(f"{ui_margin()}    {C.GRAY}{sec_label}:{C.RESET}{pad}{C.DIM}{sec_v}{C.RESET}")
+
         log_success("Skipping installation.")
         return
 
@@ -522,163 +556,93 @@ def configure_openjdk() -> None:
     if pm is None:
         log_error("Could not detect a supported package manager.")
         return
+    if pm not in spec.install_cmds:
+        log_error(f"{spec.name} has no install steps defined for {_pm_display_name(pm)}.")
+        return
     log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
 
-    install_cmds: dict[str, list[list[str]]] = {
-        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "default-jdk"]],
-        "dnf": [prefix + ["dnf", "install", "-y", "java-17-openjdk-devel"]],
-        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "jdk-openjdk"]],
-        "zypper": [prefix + ["zypper", "install", "-y", "java-17-openjdk-devel"]],
-        "apk": [prefix + ["apk", "add", "openjdk17-jdk"]],
-        "winget": [["winget", "install", "-e", "--id", "EclipseAdoptium.Temurin.17.JDK", "--silent",
-                     "--accept-package-agreements", "--accept-source-agreements"]],
-        "choco": [prefix + ["choco", "install", "temurin17", "-y"]],
-    }
-
     ok = True
-    for cmd in install_cmds[pm]:
-        if not run_with_status("Installing OpenJDK", cmd):
+    for step in spec.install_cmds[pm]:
+        cmd = step if pm == "winget" else prefix + step
+        if not run_with_status(f"Installing {spec.name}", cmd):
             ok = False
             break
 
     if ok:
-        log_success("OpenJDK configured successfully!")
-        log_info("Open a new terminal so PATH changes take effect if 'java' isn't found yet.")
+        log_success(f"{spec.name} configured successfully!")
+        log_info(f"Open a new terminal so PATH changes take effect if '{spec.bin}' isn't found yet.")
 
 
-# ------------------------------------------------------------------------------
-# FEATURE: Configure Node.js & npm
-# ------------------------------------------------------------------------------
-def configure_nodejs() -> None:
-    if shutil.which("node"):
-        log_info("Node.js is already installed on this system.")
-        node_v = subprocess.run(["node", "-v"], capture_output=True, text=True).stdout.strip()
-        print(f"{ui_margin()}    {C.GRAY}Node Version:{C.RESET} {C.DIM}{node_v}{C.RESET}")
-        if shutil.which("npm"):
-            npm_v = subprocess.run(["npm", "-v"], capture_output=True, text=True, shell=IS_WINDOWS).stdout.strip()
-            print(f"{ui_margin()}    {C.GRAY}npm Version:{C.RESET}  {C.DIM}{npm_v}{C.RESET}")
-        log_success("Skipping installation.")
-        return
+TOOL_SPECS: list[ToolSpec] = [
+    ToolSpec(
+        name="OpenJDK",
+        bin="java",
+        version_cmd=["java", "-version"],
+        version_on_stderr=True,
+        install_cmds={
+            "apt-get": [["apt-get", "update", "-qq"], ["apt-get", "install", "-y", "default-jdk"]],
+            "dnf": [["dnf", "install", "-y", "java-17-openjdk-devel"]],
+            "pacman": [["pacman", "-S", "--noconfirm", "jdk-openjdk"]],
+            "zypper": [["zypper", "install", "-y", "java-17-openjdk-devel"]],
+            "apk": [["apk", "add", "openjdk17-jdk"]],
+            "winget": [["winget", "install", "-e", "--id", "EclipseAdoptium.Temurin.17.JDK", "--silent",
+                         "--accept-package-agreements", "--accept-source-agreements"]],
+            "choco": [["choco", "install", "temurin17", "-y"]],
+        },
+    ),
+    ToolSpec(
+        name="Node.js & npm",
+        bin="node",
+        version_cmd=["node", "-v"],
+        version_label="Node Version",
+        secondary=("npm", "npm Version", ["npm", "-v"]),
+        install_cmds={
+            "apt-get": [["apt-get", "update", "-qq"], ["apt-get", "install", "-y", "nodejs", "npm"]],
+            "dnf": [["dnf", "install", "-y", "nodejs", "npm"]],
+            "pacman": [["pacman", "-S", "--noconfirm", "nodejs", "npm"]],
+            "zypper": [["zypper", "install", "-y", "nodejs", "npm"]],
+            "apk": [["apk", "add", "nodejs", "npm"]],
+            "winget": [["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS", "--silent",
+                         "--accept-package-agreements", "--accept-source-agreements"]],
+            "choco": [["choco", "install", "nodejs-lts", "-y"]],
+        },
+    ),
+    ToolSpec(
+        name="Git",
+        bin="git",
+        version_cmd=["git", "--version"],
+        version_label="Git Version",
+        install_cmds={
+            "apt-get": [["apt-get", "update", "-qq"], ["apt-get", "install", "-y", "git"]],
+            "dnf": [["dnf", "install", "-y", "git"]],
+            "pacman": [["pacman", "-S", "--noconfirm", "git"]],
+            "zypper": [["zypper", "install", "-y", "git"]],
+            "apk": [["apk", "add", "git"]],
+            "winget": [["winget", "install", "-e", "--id", "Git.Git", "--silent",
+                         "--accept-package-agreements", "--accept-source-agreements"]],
+            "choco": [["choco", "install", "git", "-y"]],
+        },
+    ),
+    ToolSpec(
+        name="Rust",
+        bin="rustc",
+        version_cmd=["rustc", "--version"],
+        version_label="Rust Version",
+        secondary=("cargo", "Cargo Version", ["cargo", "--version"]),
+        install_cmds={
+            "apt-get": [["apt-get", "update", "-qq"], ["apt-get", "install", "-y", "rustc", "cargo"]],
+            "dnf": [["dnf", "install", "-y", "rust", "cargo"]],
+            "pacman": [["pacman", "-S", "--noconfirm", "rust"]],
+            "zypper": [["zypper", "install", "-y", "rust", "cargo"]],
+            "apk": [["apk", "add", "rust", "cargo"]],
+            "winget": [["winget", "install", "-e", "--id", "Rustlang.Rustup", "--silent",
+                         "--accept-package-agreements", "--accept-source-agreements"]],
+            "choco": [["choco", "install", "rust", "-y"]],
+        },
+    ),
+]
 
-    prefix = ensure_privileges()
-    if prefix is None:
-        return
-
-    pm = detect_package_manager()
-    if pm is None:
-        log_error("Could not detect a supported package manager.")
-        return
-    log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
-
-    install_cmds: dict[str, list[list[str]]] = {
-        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "nodejs", "npm"]],
-        "dnf": [prefix + ["dnf", "install", "-y", "nodejs", "npm"]],
-        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "nodejs", "npm"]],
-        "zypper": [prefix + ["zypper", "install", "-y", "nodejs", "npm"]],
-        "apk": [prefix + ["apk", "add", "nodejs", "npm"]],
-        "winget": [["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS", "--silent",
-                     "--accept-package-agreements", "--accept-source-agreements"]],
-        "choco": [prefix + ["choco", "install", "nodejs-lts", "-y"]],
-    }
-
-    ok = True
-    for cmd in install_cmds[pm]:
-        if not run_with_status("Installing Node.js & npm", cmd):
-            ok = False
-            break
-
-    if ok:
-        log_success("Node.js & npm configured successfully!")
-        log_info("Open a new terminal so PATH changes take effect if 'node' isn't found yet.")
-
-
-# ------------------------------------------------------------------------------
-# FEATURE: Configure Git
-# ------------------------------------------------------------------------------
-def configure_git() -> None:
-    if shutil.which("git"):
-        log_info("Git is already installed on this system.")
-        git_v = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout.strip()
-        print(f"{ui_margin()}    {C.GRAY}Git Version:{C.RESET}  {C.DIM}{git_v}{C.RESET}")
-        log_success("Skipping installation.")
-        return
-
-    prefix = ensure_privileges()
-    if prefix is None:
-        return
-
-    pm = detect_package_manager()
-    if pm is None:
-        log_error("Could not detect a supported package manager.")
-        return
-    log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
-
-    install_cmds: dict[str, list[list[str]]] = {
-        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "git"]],
-        "dnf": [prefix + ["dnf", "install", "-y", "git"]],
-        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "git"]],
-        "zypper": [prefix + ["zypper", "install", "-y", "git"]],
-        "apk": [prefix + ["apk", "add", "git"]],
-        "winget": [["winget", "install", "-e", "--id", "Git.Git", "--silent",
-                     "--accept-package-agreements", "--accept-source-agreements"]],
-        "choco": [prefix + ["choco", "install", "git", "-y"]],
-    }
-
-    ok = True
-    for cmd in install_cmds[pm]:
-        if not run_with_status("Installing Git", cmd):
-            ok = False
-            break
-
-    if ok:
-        log_success("Git configured successfully!")
-        log_info("Open a new terminal so PATH changes take effect if 'git' isn't found yet.")
-
-
-# ------------------------------------------------------------------------------
-# FEATURE: Configure Rust (rustc & cargo)
-# ------------------------------------------------------------------------------
-def configure_rust() -> None:
-    if shutil.which("rustc"):
-        log_info("Rust is already installed on this system.")
-        rustc_v = subprocess.run(["rustc", "--version"], capture_output=True, text=True).stdout.strip()
-        print(f"{ui_margin()}    {C.GRAY}Rust Version:{C.RESET}  {C.DIM}{rustc_v}{C.RESET}")
-        if shutil.which("cargo"):
-            cargo_v = subprocess.run(["cargo", "--version"], capture_output=True, text=True).stdout.strip()
-            print(f"{ui_margin()}    {C.GRAY}Cargo Version:{C.RESET} {C.DIM}{cargo_v}{C.RESET}")
-        log_success("Skipping installation.")
-        return
-
-    prefix = ensure_privileges()
-    if prefix is None:
-        return
-
-    pm = detect_package_manager()
-    if pm is None:
-        log_error("Could not detect a supported package manager.")
-        return
-    log_info(f"Package manager: {C.BOLD}{C.CYAN}{_pm_display_name(pm)}{C.RESET}")
-
-    install_cmds: dict[str, list[list[str]]] = {
-        "apt-get": [prefix + ["apt-get", "update", "-qq"], prefix + ["apt-get", "install", "-y", "rustc", "cargo"]],
-        "dnf": [prefix + ["dnf", "install", "-y", "rust", "cargo"]],
-        "pacman": [prefix + ["pacman", "-S", "--noconfirm", "rust"]],
-        "zypper": [prefix + ["zypper", "install", "-y", "rust", "cargo"]],
-        "apk": [prefix + ["apk", "add", "rust", "cargo"]],
-        "winget": [["winget", "install", "-e", "--id", "Rustlang.Rustup", "--silent",
-                     "--accept-package-agreements", "--accept-source-agreements"]],
-        "choco": [prefix + ["choco", "install", "rust", "-y"]],
-    }
-
-    ok = True
-    for cmd in install_cmds[pm]:
-        if not run_with_status("Installing Rust", cmd):
-            ok = False
-            break
-
-    if ok:
-        log_success("Rust configured successfully!")
-        log_info("Open a new terminal so PATH changes take effect if 'rustc' isn't found yet.")
+TOOL_SPECS_BY_NAME: dict[str, ToolSpec] = {spec.name: spec for spec in TOOL_SPECS}
 
 
 # ------------------------------------------------------------------------------
@@ -881,20 +845,41 @@ def checkbox_menu(items: list[str]) -> list[int] | None:
 
 # ------------------------------------------------------------------------------
 # INTERACTIVE MENU & MAIN ENTRY POINT
+#
+# To add a new menu item:
+#   - CLI tool installable via a package manager -> add a ToolSpec to
+#     TOOL_SPECS above, then add _spec_entry("Your Tool Name") below.
+#   - Anything else (custom download, external installer, etc.) -> write a
+#     handler function and add a MenuEntry directly, same as GCC/VS Code
+#     Profile below. Set check_bin if there's a binary to flag as missing.
+# Nothing else needs to change: the checkbox menu, the "not installed"
+# indicator, and dispatch on selection all read from this one list.
 # ------------------------------------------------------------------------------
-MENU_ITEMS: list[tuple[str, Callable[[], None]]] = [
-    ("VS Code Profile", download_vscode_profile),
-    ("OpenJDK", configure_openjdk),
-    ("Node.js & npm", configure_nodejs),
-    ("Git", configure_git),
-    ("GCC", configure_gcc),
-    ("Rust", configure_rust),
+@dataclass(frozen=True)
+class MenuEntry:
+    name: str
+    handler: Callable[[], None]
+    check_bin: str | None = None  # binary checked for the "not installed" indicator; None to skip
+
+
+def _spec_entry(name: str) -> MenuEntry:
+    spec = TOOL_SPECS_BY_NAME[name]
+    return MenuEntry(spec.name, lambda: install_tool(spec), check_bin=spec.bin)
+
+
+MENU_ITEMS: list[MenuEntry] = [
+    MenuEntry("VS Code Profile", download_vscode_profile),
+    _spec_entry("OpenJDK"),
+    _spec_entry("Node.js & npm"),
+    _spec_entry("Git"),
+    MenuEntry("GCC", configure_gcc, check_bin="gcc"),
+    _spec_entry("Rust"),
 ]
 
 
 def interactive_menu() -> bool:
     """Shows the menu, runs the selection, and returns False on quit."""
-    labels = [label for label, _ in MENU_ITEMS]
+    labels = [entry.name for entry in MENU_ITEMS]
     chosen = checkbox_menu(labels)
 
     clear_screen()
@@ -908,8 +893,7 @@ def interactive_menu() -> bool:
         return False
 
     for i in chosen:
-        _, handler = MENU_ITEMS[i]
-        handler()
+        MENU_ITEMS[i].handler()
         print()
 
     try:
