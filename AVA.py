@@ -275,32 +275,44 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
     print(f"{margin}{C.CYAN}{mid}{C.RESET}")
 
     for i, label in enumerate(items):
+        entry = MENU_ITEMS[i]
         is_cursor = i == cursor
         pointer_plain = ICON_PROMPT if is_cursor else "  "
         checked_plain = "\u25cf" if selected[i] else "\u25cb"
 
-        # Right-side indicator: only shown for items we actually have an
-        # availability check for, and only when that tool is missing.
+        # Right-side suffix: a "not installed" mark for missing tools, or
+        # the installed version (cached, so it's only fetched once per
+        # menu session) for tools we know are present.
         is_missing = label in missing_tools
-        indicator_plain = f" {ICON_WARN}" if is_missing else ""
+        is_installed = entry.check_bin is not None and not is_missing
+        version = _cached_version(entry) if is_installed else None
+        suffix_plain = f" {ICON_WARN}" if is_missing else (f"  {version}" if version else "")
 
-        row_plain = f"  {pointer_plain} {checked_plain} {label}{indicator_plain}"
+        row_plain = f"  {pointer_plain} {checked_plain} {label}{suffix_plain}"
         if len(row_plain) > inner_width:
             overflow = len(row_plain) - inner_width
-            label = label[: max(0, len(label) - overflow - 3)] + "..."
-            row_plain = f"  {pointer_plain} {checked_plain} {label}{indicator_plain}"
+            if version:
+                # Trim the version text first; the tool name matters more.
+                trimmed = version[: max(0, len(version) - overflow - 3)] + "..."
+                suffix_plain = f"  {trimmed}"
+            else:
+                label = label[: max(0, len(label) - overflow - 3)] + "..."
+            row_plain = f"  {pointer_plain} {checked_plain} {label}{suffix_plain}"
         pad = " " * max(0, inner_width - len(row_plain))
 
         pointer_colored = f"{C.PURPLE}{ICON_PROMPT}{C.RESET}" if is_cursor else "  "
         checked_colored = f"{C.GREEN}\u25cf{C.RESET}" if selected[i] else f"{C.GRAY}\u25cb{C.RESET}"
-        label_colored = label
-        indicator_colored = (
-            f" {C.YELLOW}{ICON_WARN}{C.RESET}" if is_missing else ""
-        )
+        label_colored = f"{C.DIM}{label}{C.RESET}" if is_installed else label
+        if is_missing:
+            suffix_colored = f" {C.YELLOW}{ICON_WARN}{C.RESET}"
+        elif version:
+            suffix_colored = f"  {C.DIM}{C.YELLOW}{version}{C.RESET}"
+        else:
+            suffix_colored = ""
 
         print(
             f"{margin}{C.CYAN}{BOX_V}{C.RESET}  {pointer_colored} {checked_colored} {label_colored}"
-            f"{indicator_colored}{pad}{C.CYAN}{BOX_V}{C.RESET}"
+            f"{suffix_colored}{pad}{C.CYAN}{BOX_V}{C.RESET}"
         )
 
     print(f"{margin}{C.CYAN}{bot}{C.RESET}")
@@ -859,12 +871,17 @@ def checkbox_menu(items: list[str]) -> list[int] | None:
 class MenuEntry:
     name: str
     handler: Callable[[], None]
-    check_bin: str | None = None  # binary checked for the "not installed" indicator; None to skip
+    check_bin: str | None = None            # binary checked for the "not installed" indicator; None to skip
+    version_cmd: list[str] | None = None    # command to show inline once installed; None to skip
+    version_on_stderr: bool = False         # e.g. `java -version` prints to stderr
 
 
 def _spec_entry(name: str) -> MenuEntry:
     spec = TOOL_SPECS_BY_NAME[name]
-    return MenuEntry(spec.name, lambda: install_tool(spec), check_bin=spec.bin)
+    return MenuEntry(
+        spec.name, lambda: install_tool(spec), check_bin=spec.bin,
+        version_cmd=spec.version_cmd, version_on_stderr=spec.version_on_stderr,
+    )
 
 
 MENU_ITEMS: list[MenuEntry] = [
@@ -872,13 +889,41 @@ MENU_ITEMS: list[MenuEntry] = [
     _spec_entry("OpenJDK"),
     _spec_entry("Node.js & npm"),
     _spec_entry("Git"),
-    MenuEntry("GCC", configure_gcc, check_bin="gcc"),
+    MenuEntry("GCC", configure_gcc, check_bin="gcc", version_cmd=["gcc", "--version"]),
     _spec_entry("Rust"),
 ]
+
+# Caches each installed tool's version string for the life of the menu
+# session, so re-rendering on every arrow-key press doesn't re-spawn a
+# subprocess per keystroke. Cleared each time interactive_menu() runs, so a
+# tool just installed shows its version on the next visit to the menu.
+_VERSION_CACHE: dict[str, str | None] = {}
+
+
+_VERSION_NUMBER_RE = re.compile(r"\d+(?:\.\d+){1,2}")
+
+
+def _cached_version(entry: MenuEntry) -> str | None:
+    if entry.version_cmd is None:
+        return None
+    if entry.name not in _VERSION_CACHE:
+        try:
+            result = subprocess.run(entry.version_cmd, capture_output=True, text=True)
+            lines = (result.stderr if entry.version_on_stderr else result.stdout).splitlines()
+            raw = lines[0].strip() if lines else ""
+            # Pull out just the version number (e.g. "2.43.0") instead of
+            # the full raw string (e.g. "git version 2.43.0") to keep the
+            # menu row compact.
+            match = _VERSION_NUMBER_RE.search(raw)
+            _VERSION_CACHE[entry.name] = f"v{match.group()}" if match else (raw or None)
+        except Exception:
+            _VERSION_CACHE[entry.name] = None
+    return _VERSION_CACHE[entry.name]
 
 
 def interactive_menu() -> bool:
     """Shows the menu, runs the selection, and returns False on quit."""
+    _VERSION_CACHE.clear()
     labels = [entry.name for entry in MENU_ITEMS]
     chosen = checkbox_menu(labels)
 
