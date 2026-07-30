@@ -31,6 +31,9 @@ AVA_VERSION = "1.1.0"
 VSCODE_PROFILE_DEFAULT_URL = (
     "https://github.com/shams-27/VS-Code-Profile/blob/main/shams_vscode.code-profile"
 )
+VSCODE_PROFILE_CONTEST_URL = (
+    "https://github.com/shams-27/VS-Code-Profile/blob/main/contest-profile.code-profile"
+)
 GCC_SCRIPT_URL = "https://raw.githubusercontent.com/ShamsKabir/tools/main/shams_gcc.ps1"
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -446,8 +449,8 @@ def ensure_privileges() -> list[str] | None:
 # ------------------------------------------------------------------------------
 # FEATURE: Download VS Code Profile
 # ------------------------------------------------------------------------------
-def download_vscode_profile() -> None:
-    raw_url = VSCODE_PROFILE_DEFAULT_URL
+def download_vscode_profile(url: str = VSCODE_PROFILE_DEFAULT_URL) -> None:
+    raw_url = url
     if "github.com" in raw_url and "/blob/" in raw_url:
         raw_url = raw_url.replace("github.com/", "raw.githubusercontent.com/").replace("/blob/", "/")
 
@@ -897,7 +900,11 @@ def _spec_entry(name: str) -> MenuEntry:
 
 
 MENU_ITEMS: list[MenuEntry] = [
-    MenuEntry("VS Code Profile", download_vscode_profile),
+    MenuEntry("VS Code Profile (Personal)", download_vscode_profile),
+    MenuEntry(
+        "VS Code Profile (Contest)",
+        lambda: download_vscode_profile(VSCODE_PROFILE_CONTEST_URL),
+    ),
     _spec_entry("OpenJDK"),
     _spec_entry("Node.js & npm"),
     _spec_entry("Git"),
