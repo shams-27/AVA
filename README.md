@@ -1,4 +1,4 @@
-# AVA — Terminal Assistant    
+# AVA — Terminal Assistant
 
 AVA is an interactive terminal assistant for Linux that automates
 common developer environment setup tasks. It's a single Python file with
@@ -79,8 +79,15 @@ You can select and queue up multiple tasks at once before running them.
 
 Tasks are grouped under headings (Languages & Runtimes, Developer Tools,
 Assistant). Each row shows its status on the right: a green check with the
-installed version, or `not installed`. The footer shows how many tasks you
-have selected.
+installed version, or `not installed` (installed tools are dimmed so the
+missing ones stand out). The **Ask AVA (AI)** row shows whether the local AI is
+ready (`AI ready`, `AI offline` or `no model`), and a hint appears in the footer
+while it is highlighted. The footer names the tasks you have selected.
+
+The menu adapts to the terminal: boxes shrink on narrow windows, and on short
+windows the list scrolls with `↑ N more` / `↓ N more` markers so the highlighted
+row is always visible. Without UTF-8 support, AVA draws plain ASCII (`[ ]` and
+`[x]` checkboxes).
 
 ## Platform support
 
