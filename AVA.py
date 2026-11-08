@@ -26,7 +26,7 @@ import tty
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-fro typing import Callable
+from typing import Callable
 
 AVA_VERSION = "1.2.0"
 
