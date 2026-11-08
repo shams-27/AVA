@@ -75,6 +75,7 @@ if UNICODE_OK:
     ARROW_UP = "\u2191"
     ARROW_DOWN = "\u2193"
     DOT = "\u00b7"
+    CHECK_ON, CHECK_OFF = "\u25cf", "\u25cb"
     BOLT_IS_WIDE = False  # ◆ is a normal single-width glyph in most terminals
     BOX_TL, BOX_TR, BOX_BL, BOX_BR = "\u256d", "\u256e", "\u2570", "\u256f"
     BOX_ML, BOX_MR = "\u251c", "\u2524"
@@ -89,6 +90,7 @@ else:
     ARROW_UP = "^"
     ARROW_DOWN = "v"
     DOT = "-"
+    CHECK_ON, CHECK_OFF = "[x]", "[ ]"
     BOLT_IS_WIDE = False
     BOX_TL, BOX_TR, BOX_BL, BOX_BR = "+", "+", "+", "+"
     BOX_ML, BOX_MR = "+", "+"
@@ -130,6 +132,15 @@ def _term_width() -> int:
     return shutil.get_terminal_size(fallback=(80, 24)).columns
 
 
+def _term_height() -> int:
+    return shutil.get_terminal_size(fallback=(80, 24)).lines
+
+
+def _box_w(preferred: int = 64) -> int:
+    """Width for boxes: the usual 64 columns, shrunk to fit narrow terminals."""
+    return max(30, min(preferred, _term_width() - 2))
+
+
 def ui_margin(width: int = 64) -> str:
     return " " * max(0, (_term_width() - width) // 2)
 
@@ -137,24 +148,32 @@ def ui_margin(width: int = 64) -> str:
 # ------------------------------------------------------------------------------
 # Dynamic header box (mirrors render_intro_box from the bash version)
 # ------------------------------------------------------------------------------
+def _title_parts(inner_width: int) -> tuple[str, str]:
+    """(plain, colored) title text; a shorter form is used when the box is narrow."""
+    full_plain = f"  {ICON_BOLT} AVA {EM_DASH} Terminal Assistant (v{AVA_VERSION})"
+    if len(full_plain) + 1 <= inner_width:
+        return full_plain, (
+            f"  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
+            f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
+        )
+    return f"  {ICON_BOLT} AVA (v{AVA_VERSION})", (
+        f"  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
+    )
+
+
 def render_intro_box() -> None:
-    box_width = 64
+    box_width = _box_w()
     inner_width = box_width - 2
     margin = ui_margin(box_width)
 
     top = BOX_TL + BOX_H * inner_width + BOX_TR
     bot = BOX_BL + BOX_H * inner_width + BOX_BR
 
-    line1_plain = f"  {ICON_BOLT} AVA {EM_DASH} Terminal Assistant (v{AVA_VERSION})"
-    wide_adjust = 1 if BOLT_IS_WIDE else 0
-    pad1 = " " * max(0, inner_width - len(line1_plain) - wide_adjust)
+    title_plain, title_colored = _title_parts(inner_width)
+    pad = " " * max(0, inner_width - len(title_plain) - (1 if BOLT_IS_WIDE else 0))
 
     print(f"{margin}{C.CYAN}{top}{C.RESET}")
-    print(
-        f"{margin}{C.CYAN}{BOX_V}{C.RESET}  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
-        f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
-        f"{pad1}{C.CYAN}{BOX_V}{C.RESET}"
-    )
+    print(f"{margin}{C.CYAN}{BOX_V}{C.RESET}{title_colored}{pad}{C.CYAN}{BOX_V}{C.RESET}")
     print(f"{margin}{C.CYAN}{bot}{C.RESET}")
 
 
@@ -181,8 +200,49 @@ def _tool_availability() -> list[tuple[str, bool]]:
 # has a checkbox on the left and a right-aligned status (installed version or
 # "not installed"), and a footer shows the key hints plus a selection count.
 # ------------------------------------------------------------------------------
+def _pick(candidates: list[str], inner_width: int) -> str:
+    """First candidate that fits with a space to spare; the last one if none do."""
+    for text in candidates:
+        if len(text) + 1 <= inner_width:
+            return text
+    return candidates[-1]
+
+
+def _menu_window(total: int, focus: int, avail: int) -> tuple[int, int]:
+    """Which slice [start, end) of `total` body rows to show in `avail` rows,
+    keeping row `focus` visible (and roughly centred once the list scrolls)."""
+    if total <= avail:
+        return 0, total
+    start = max(0, min(focus - avail // 2, total - avail))
+    return start, start + avail
+
+
+def _selection_summary(names: list[str], inner_width: int) -> tuple[str, str]:
+    """(plain, colored) footer line naming the selected tasks, shortened to fit."""
+    count = len(names)
+    noun = "task" if count == 1 else "tasks"
+    long_head, short_head = f"{count} {noun} selected", f"{count} selected"
+
+    def shown(k: int) -> str:
+        text = ", ".join(names[:k])
+        return text + (f" +{count - k} more" if k < count else "")
+
+    options = [
+        (long_head, f": {shown(count)} {DOT} enter runs them"),
+        (long_head, f": {shown(count)}"),
+        (short_head, f": {shown(count)}"),
+    ]
+    options += [(short_head, f": {shown(k)}") for k in range(count - 1, 0, -1)]
+    options.append((short_head, ""))
+    for head, rest in options:
+        plain = f"  {head}{rest}"
+        if len(plain) + 1 <= inner_width:
+            break
+    return plain, f"  {C.GREEN}{head}{C.RESET}{C.GRAY}{rest}{C.RESET}"
+
+
 def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> None:
-    box_width = 64
+    box_width = _box_w()
     inner_width = box_width - 2
     margin = ui_margin(box_width)
 
@@ -197,91 +257,132 @@ def render_full_menu(items: list[str], selected: list[bool], cursor: int) -> Non
         pad = " " * max(0, inner_width - len(plain))
         print(f"{margin}{edge}{colored}{pad}{edge}")
 
-    # --- Title row ---
-    title_plain = f"  {ICON_BOLT} AVA {EM_DASH} Terminal Assistant (v{AVA_VERSION})"
-    wide_adjust = 1 if BOLT_IS_WIDE else 0
-    title_colored = (
-        f"  {C.BOLD}{C.PURPLE}{ICON_BOLT} AVA{C.RESET} "
-        f"{C.GRAY}{EM_DASH} Terminal Assistant{C.RESET} {C.DIM}(v{AVA_VERSION}){C.RESET}"
-    )
-    print(f"{margin}{C.CYAN}{top}{C.RESET}")
-    print_row(title_plain + " " * wide_adjust, title_colored)
-    print(f"{margin}{C.CYAN}{mid}{C.RESET}")
-
     missing_tools = {name for name, ok in _tool_availability() if not ok}
 
-    # --- Items, grouped under headings ---
+    # --- Status wording: longest-first variants per item; items of the same kind
+    # (installed / missing) all switch to the same shorter wording together, so the
+    # column stays consistent on narrow terminals. ---
+    prefix_len = 4 + 2 + 1 + max(len(CHECK_ON), len(CHECK_OFF)) + 1
+    plans: dict[int, tuple[list[str], str, str]] = {}      # item -> (variants, tone, kind)
+    for i, label in enumerate(items):
+        entry = MENU_ITEMS[i]
+        if label in missing_tools:
+            plans[i] = (["not installed", "missing"], "warn", "missing")
+        elif entry.check_bin is not None:
+            version = _cached_version(entry)
+            names = [f"{ICON_SUCCESS} {version}", ICON_SUCCESS] if version else [f"{ICON_SUCCESS} installed", ICON_SUCCESS]
+            plans[i] = (names, "ok", "installed")
+        elif entry.status_fn is not None:
+            variants, tone = entry.status_fn()
+            plans[i] = (variants, tone, f"custom{i}")
+        else:
+            plans[i] = ([], "ok", "")
+    tier: dict[str, int] = {}
+    for i, (variants, _tone, kind) in plans.items():
+        if variants:
+            need = next((n for n, v in enumerate(variants)
+                         if prefix_len + len(items[i]) + len(v) + 3 <= inner_width), len(variants) - 1)
+            tier[kind] = max(tier.get(kind, 0), need)
+
+    # --- Body rows (group headings, separators, items): (plain, colored, item index) ---
+    body: list[tuple[str, str, int | None]] = []
     last_group: str | None = None
     for i, label in enumerate(items):
         entry = MENU_ITEMS[i]
 
         if entry.group != last_group:
             if last_group is not None:
-                print_row("", "")
+                body.append(("", "", None))
             if entry.group:
                 heading = entry.group.upper()
-                print_row(f"  {heading}", f"  {C.BOLD}{C.GRAY}{heading}{C.RESET}")
+                body.append((f"  {heading}", f"  {C.BOLD}{C.GRAY}{heading}{C.RESET}", None))
             last_group = entry.group
 
         is_cursor = i == cursor
         pointer_plain = ICON_PROMPT if is_cursor else "  "
-        checked_plain = "●" if selected[i] else "○"
+        checked_plain = CHECK_ON if selected[i] else CHECK_OFF
 
-        # Right-aligned status: installed version (cached, so it's only
-        # fetched once per menu session), "not installed", or nothing for
-        # entries that aren't tied to a binary.
-        is_missing = label in missing_tools
-        is_installed = entry.check_bin is not None and not is_missing
-        if is_missing:
-            status_plain = "not installed"
-        elif is_installed:
-            version = _cached_version(entry)
-            status_plain = f"{ICON_SUCCESS} {version}" if version else f"{ICON_SUCCESS} installed"
-        else:
-            status_plain = ""
-
-        left_plain = f"    {pointer_plain} {checked_plain} {label}"
+        variants, tone, kind = plans[i]
+        is_installed = kind == "installed"
+        status_plain = variants[min(tier.get(kind, 0), len(variants) - 1)] if variants else ""
+        prefix = f"    {pointer_plain} {checked_plain} "
         right_len = len(status_plain) + 2 if status_plain else 0
-        if len(left_plain) + right_len + 1 > inner_width:
-            # Defensive: shorten the label (not the status) so the border
-            # always lines up.
-            keep = max(1, inner_width - right_len - 1 - len(left_plain) + len(label) - 3)
+        if len(prefix) + len(label) + right_len + 1 > inner_width:
+            # Defensive: shorten the label (not the status) so the border always lines up.
+            keep = max(1, inner_width - len(prefix) - right_len - 1 - 3)
             label = label[:keep] + "..."
-            left_plain = f"    {pointer_plain} {checked_plain} {label}"
+        left_plain = prefix + label
         gap = " " * max(1, inner_width - len(left_plain) - right_len)
 
         pointer_colored = f"{C.PURPLE}{ICON_PROMPT}{C.RESET}" if is_cursor else "  "
-        checked_colored = f"{C.GREEN}●{C.RESET}" if selected[i] else f"{C.GRAY}○{C.RESET}"
-        label_colored = f"{C.BOLD}{label}{C.RESET}" if is_cursor else label
-        if is_missing:
-            status_colored = f"{C.YELLOW}{status_plain}{C.RESET}"
-        elif status_plain:
-            status_colored = f"{C.GREEN}{status_plain}{C.RESET}"
+        checked_colored = f"{C.GREEN}{CHECK_ON}{C.RESET}" if selected[i] else f"{C.GRAY}{CHECK_OFF}{C.RESET}"
+        if is_cursor:
+            label_colored = f"{C.BOLD}{label}{C.RESET}"
+        elif is_installed:
+            label_colored = f"{C.DIM}{label}{C.RESET}"      # already installed: recede
         else:
-            status_colored = ""
+            label_colored = label
+        tint = C.YELLOW if tone == "warn" else C.GREEN
+        status_colored = f"{tint}{status_plain}{C.RESET}" if status_plain else ""
 
         plain = left_plain + gap + (status_plain + "  " if status_plain else "")
-        colored = (
-            f"    {pointer_colored} {checked_colored} {label_colored}{gap}"
-            + (status_colored + "  " if status_plain else "")
-        )
+        colored = f"    {pointer_colored} {checked_colored} {label_colored}{gap}" + (status_colored + "  " if status_plain else "")
+        body.append((plain, colored, i))
+
+    # --- Fit the body to the terminal height, scrolling if needed ---
+    fixed_rows = 7                                   # top, title, rule, rule, hint, note, bottom
+    budget = _term_height() - 1                      # keep the last line free so nothing scrolls off
+    lead = 1 if budget - fixed_rows - len(body) >= 2 else 0   # blank lines above and below if there is room
+    avail = max(3, budget - fixed_rows - 2 * lead)
+    focus = next(n for n, row in enumerate(body) if row[2] == cursor)
+    start, end = _menu_window(len(body), focus, avail)
+    shown = body[start:end]
+
+    def more(arrow: str, rows: list[tuple[str, str, int | None]]) -> tuple[str, str, None]:
+        n = sum(1 for row in rows if row[2] is not None)
+        text = f"      {arrow} {n} more"
+        return text, f"      {C.GRAY}{arrow} {n} more{C.RESET}", None
+
+    if start > 0:
+        shown[0] = more(ARROW_UP, body[: start + 1])
+    if end < len(body):
+        shown[-1] = more(ARROW_DOWN, body[end - 1:])
+
+    # --- Draw ---
+    if lead:
+        print()
+    title_plain, title_colored = _title_parts(inner_width)
+    print(f"{margin}{C.CYAN}{top}{C.RESET}")
+    print_row(title_plain + (" " if BOLT_IS_WIDE else ""), title_colored)
+    print(f"{margin}{C.CYAN}{mid}{C.RESET}")
+    for plain, colored, _idx in shown:
         print_row(plain, colored)
 
-    # --- Footer: key hints + selection count ---
+    # --- Footer: key hints + selection summary (or a tip for the highlighted item) ---
     print(f"{margin}{C.CYAN}{mid}{C.RESET}")
-    hint_plain = f"  {ARROW_UP}{ARROW_DOWN} move {DOT} space select {DOT} enter run {DOT} q quit"
+    hint_plain = _pick([
+        f"  {ARROW_UP}{ARROW_DOWN} move {DOT} space select {DOT} enter run {DOT} q quit",
+        f"  {ARROW_UP}{ARROW_DOWN} {DOT} space {DOT} enter {DOT} q quit",
+        f"  {ARROW_UP}{ARROW_DOWN} {DOT} space {DOT} enter {DOT} q",
+    ], inner_width)
     print_row(hint_plain, f"  {C.GRAY}{hint_plain.strip()}{C.RESET}")
 
-    count = sum(selected)
-    if count:
-        noun = "task" if count == 1 else "tasks"
-        note_plain = f"  {count} {noun} selected {DOT} enter runs them"
-        note_colored = f"  {C.GREEN}{count} {noun} selected{C.RESET} {C.GRAY}{DOT} enter runs them{C.RESET}"
+    names = [items[i] for i, picked in enumerate(selected) if picked]
+    if names:
+        note_plain, note_colored = _selection_summary(names, inner_width)
     else:
-        note_plain = "  Nothing selected: enter runs the highlighted item"
+        tip = MENU_ITEMS[cursor].tip
+        note_plain = _pick(
+            ([f"  {tip} {DOT} enter to open", f"  {tip}"] if tip else [])
+            + ["  Nothing selected: enter runs the highlighted item", "  Enter runs the highlighted item",
+               "  Enter runs this item"],
+            inner_width,
+        )
         note_colored = f"  {C.DIM}{note_plain.strip()}{C.RESET}"
     print_row(note_plain, note_colored)
     print(f"{margin}{C.CYAN}{bot}{C.RESET}")
+    if lead:
+        print()
 
 
 # ------------------------------------------------------------------------------
@@ -307,7 +408,7 @@ def run_with_status(label: str, cmd: list[str] | str, shell: bool = False, captu
         log_file.close()
         return False
 
-    box_width = 64
+    box_width = _box_w()
     inner_width = box_width - 7
     margin = ui_margin(box_width)
     top_dashes = BOX_H * max(1, box_width - len(label) - 6)
@@ -991,8 +1092,8 @@ def _offer_install_missing(absent: list[str]) -> bool:
 
 
 def _print_boxed(title: str, rows: list[tuple[str, str]], color: str) -> None:
-    """Draws a 64-column box. rows are (text, style) pairs; long text is wrapped."""
-    box_width = 64
+    """Draws a box (64 columns, or narrower on small terminals). rows are (text, style) pairs; long text is wrapped."""
+    box_width = _box_w()
     inner = box_width - 4
     margin = ui_margin(box_width)
     top_dashes = BOX_H * max(1, box_width - len(title) - 5)
@@ -1149,7 +1250,7 @@ class _SetupBox:
     LABEL = "Setting things up"
 
     def __init__(self) -> None:
-        self.box_width = 64
+        self.box_width = _box_w()
         self.inner_width = self.box_width - 7
         self.margin = ui_margin(self.box_width)
         self.first = True
@@ -1486,7 +1587,7 @@ def _print_output_box(text: str, ok: bool) -> None:
     # Grow the box to fit the widest line (never narrower than the standard 64 columns);
     # only lines wider than the terminal itself get wrapped.
     widest = max((_disp_width(ln) for ln in lines), default=0)
-    box_width = min(max(64, widest + 4), max(64, _term_width() - 2))
+    box_width = min(max(_box_w(), widest + 4), max(30, _term_width() - 2))
     inner = box_width - 4
     margin = ui_margin(box_width)
 
@@ -1871,9 +1972,7 @@ def checkbox_menu(items: list[str]) -> list[int] | None:
 
     def render() -> None:
         clear_screen()
-        print()
         render_full_menu(items, selected, cursor)
-        print()
 
     with raw_input_mode():
         if _TTY:
@@ -1927,6 +2026,8 @@ class MenuEntry:
     version_cmd: list[str] | None = None    # command to show inline once installed; None to skip
     version_on_stderr: bool = False         # e.g. `java -version` prints to stderr
     group: str = ""                         # heading shown above the item; keep items of one group together
+    status_fn: Callable[[], tuple[list[str], str]] | None = None   # (wordings longest-first, "ok"|"warn") for the status column
+    tip: str = ""                           # one-line hint shown in the footer while the item is highlighted
 
 
 GROUP_LANGUAGES = "Languages & Runtimes"
@@ -1943,6 +2044,37 @@ def _spec_entry(name: str, group: str = "") -> MenuEntry:
     )
 
 
+# Whether the local AI is usable, checked once per menu session (not on every
+# key press) with a short timeout so the menu never waits on it.
+_AI_STATUS_CACHE: dict[str, str] = {}
+
+
+def _ai_state() -> str:
+    """'ready', 'no model' or 'offline'."""
+    if "state" not in _AI_STATUS_CACHE:
+        state = "offline"
+        try:
+            tags = _ollama_get("/api/tags", timeout=0.5)
+            if tags is not None:
+                model = _model_name()
+                names = {m.get("name", "") for m in tags.get("models", []) if isinstance(m, dict)}
+                has = model in names or (":" not in model and f"{model}:latest" in names)
+                state = "ready" if has else "no model"
+        except Exception:  # noqa: BLE001
+            state = "offline"
+        _AI_STATUS_CACHE["state"] = state
+    return _AI_STATUS_CACHE["state"]
+
+
+def _ai_status() -> tuple[list[str], str]:
+    state = _ai_state()
+    if state == "ready":
+        return [f"{ICON_SUCCESS} AI ready", f"{ICON_SUCCESS} ready", ICON_SUCCESS], "ok"
+    if state == "no model":
+        return ["AI: no model", "no model"], "warn"
+    return ["AI offline", "offline"], "warn"
+
+
 MENU_ITEMS: list[MenuEntry] = [
     _spec_entry("Node.js & npm", GROUP_LANGUAGES),
     _spec_entry("OpenJDK", GROUP_LANGUAGES),
@@ -1953,7 +2085,8 @@ MENU_ITEMS: list[MenuEntry] = [
     _spec_entry("GitHub CLI", GROUP_TOOLS),
     _spec_entry("CMake", GROUP_TOOLS),
     _spec_entry("Docker", GROUP_TOOLS),
-    MenuEntry("Ask AVA (AI)", ask_ava, group=GROUP_ASSISTANT),
+    MenuEntry("Ask AVA (AI)", ask_ava, group=GROUP_ASSISTANT, status_fn=_ai_status,
+              tip="Describe a task in plain English"),
 ]
 
 # Caches each installed tool's version string for the life of the menu
@@ -1987,6 +2120,7 @@ def _cached_version(entry: MenuEntry) -> str | None:
 def interactive_menu() -> bool:
     """Shows the menu, runs the selection, and returns False on quit."""
     _VERSION_CACHE.clear()
+    _AI_STATUS_CACHE.clear()
     labels = [entry.name for entry in MENU_ITEMS]
     chosen = checkbox_menu(labels)
 
