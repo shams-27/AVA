@@ -3,7 +3,11 @@ command post-processing and package-manager detection. Standard library only.
 
 Run from the repository root:  python3 -m unittest discover -s tests -v
 """
+import contextlib
+import io
 import os
+import re
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -282,6 +286,216 @@ class ToolSpecTests(unittest.TestCase):
     def test_names_are_unique(self):
         names = [s.name for s in AVA.TOOL_SPECS]
         self.assertEqual(len(names), len(set(names)))
+
+
+_ANSI = re.compile(r"\x1b\[[0-9?;]*[A-Za-z]")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _capture(fn, *args):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        fn(*args)
+    return _ANSI.sub("", buf.getvalue())
+
+
+def _render_menu(cols, rows, cursor=0, selected=None, ai="offline"):
+    """Renders the menu as plain text for a terminal of the given size."""
+    items = [e.name for e in AVA.MENU_ITEMS]
+    selected = selected or [False] * len(items)
+    avail = [(e.name, k % 2 == 0) for k, e in enumerate(e for e in AVA.MENU_ITEMS if e.check_bin)]
+    AVA._AI_STATUS_CACHE["state"] = ai
+    try:
+        with mock.patch.object(AVA, "_term_width", return_value=cols), \
+                mock.patch.object(AVA, "_term_height", return_value=rows), \
+                mock.patch.object(AVA, "_tool_availability", return_value=avail), \
+                mock.patch.object(AVA, "_cached_version", return_value="v1.2.3"):
+            return _capture(AVA.render_full_menu, items, selected, cursor)
+    finally:
+        AVA._AI_STATUS_CACHE.clear()
+
+
+class MenuLayoutTests(unittest.TestCase):
+    """The menu must stay readable on small and narrow terminals."""
+
+    WIDTHS = (34, 40, 50, 64, 80, 120)
+    HEIGHTS = (12, 14, 16, 20, 24, 30, 40)
+
+    def test_every_line_fits_the_terminal_width(self):
+        for cols in self.WIDTHS:
+            with self.subTest(cols=cols):
+                for line in _render_menu(cols, 40).split("\n"):
+                    self.assertLessEqual(len(line), cols, line)
+
+    def test_borders_line_up_at_every_width(self):
+        for cols in self.WIDTHS:
+            with self.subTest(cols=cols):
+                lines = [ln for ln in _render_menu(cols, 40).split("\n") if ln.strip()]
+                self.assertEqual(len({len(ln.rstrip()) for ln in lines}), 1, cols)
+
+    def test_never_taller_than_the_terminal(self):
+        for rows in self.HEIGHTS:
+            with self.subTest(rows=rows):
+                self.assertLessEqual(_render_menu(80, rows).count("\n"), rows - 1)
+
+    def test_highlighted_row_is_always_visible(self):
+        n = len(AVA.MENU_ITEMS)
+        for rows in (12, 16, 24, 40):
+            for cursor in range(n):
+                with self.subTest(rows=rows, cursor=cursor):
+                    text = _render_menu(80, rows, cursor=cursor)
+                    self.assertIn(AVA.ICON_PROMPT, text)
+                    self.assertIn(AVA.MENU_ITEMS[cursor].name[:4], text.split(AVA.ICON_PROMPT)[1].split("\n")[0])
+
+    def test_scroll_indicators_show_hidden_items(self):
+        up = re.escape(AVA.ARROW_UP) + r" \d+ more"
+        down = re.escape(AVA.ARROW_DOWN) + r" \d+ more"
+        top = _render_menu(80, 12, cursor=0)
+        self.assertRegex(top, down)
+        self.assertNotRegex(top, up)
+        bottom = _render_menu(80, 12, cursor=len(AVA.MENU_ITEMS) - 1)
+        self.assertRegex(bottom, up)
+        self.assertNotRegex(bottom, down)
+
+    def test_everything_is_shown_when_it_fits(self):
+        text = _render_menu(80, 40)
+        for entry in AVA.MENU_ITEMS:
+            self.assertIn(entry.name, text)
+        self.assertNotRegex(text, r"\d+ more")
+
+    def test_selected_task_names_are_listed_in_the_footer(self):
+        selected = [False] * len(AVA.MENU_ITEMS)
+        selected[2] = selected[3] = True
+        text = _render_menu(80, 40, selected=selected)
+        self.assertIn("2 tasks selected: Go, Rust", text)
+
+    def test_ask_ava_shows_ai_status_and_tip(self):
+        last = len(AVA.MENU_ITEMS) - 1
+        self.assertIn("AI ready", _render_menu(80, 40, ai="ready"))
+        self.assertIn("AI offline", _render_menu(80, 40, ai="offline"))
+        self.assertIn("no model", _render_menu(80, 40, ai="no model"))
+        self.assertIn("Describe a task in plain English", _render_menu(80, 40, cursor=last))
+        self.assertNotIn("Describe a task in plain English", _render_menu(80, 40, cursor=0))
+
+    def test_narrow_menu_uses_one_wording_for_missing_tools(self):
+        text = _render_menu(32, 40)
+        self.assertIn("missing", text)
+        self.assertNotIn("not installed", text)
+
+    def test_wide_menu_keeps_full_wording(self):
+        text = _render_menu(100, 40)
+        self.assertIn("not installed", text)
+        self.assertIn("v1.2.3", text)
+
+
+class LayoutHelperTests(unittest.TestCase):
+    def test_box_width_adapts_to_terminal(self):
+        for cols, expected in [(120, 64), (66, 64), (50, 48), (20, 30)]:
+            with self.subTest(cols=cols), mock.patch.object(AVA, "_term_width", return_value=cols):
+                self.assertEqual(AVA._box_w(), expected)
+
+    def test_pick_returns_first_candidate_that_fits(self):
+        self.assertEqual(AVA._pick(["long text here", "short"], 20), "long text here")
+        self.assertEqual(AVA._pick(["long text here", "short"], 10), "short")
+        self.assertEqual(AVA._pick(["long text here", "still long"], 4), "still long")
+
+    def test_menu_window_keeps_focus_visible(self):
+        self.assertEqual(AVA._menu_window(10, 5, 20), (0, 10))
+        for focus in range(20):
+            with self.subTest(focus=focus):
+                start, end = AVA._menu_window(20, focus, 8)
+                self.assertEqual(end - start, 8)
+                self.assertTrue(start <= focus < end)
+                self.assertTrue(0 <= start and end <= 20)
+
+    def test_selection_summary_singular_and_plural(self):
+        self.assertIn("1 task selected: Go", AVA._selection_summary(["Go"], 62)[0])
+        self.assertIn("2 tasks selected: Go, Rust", AVA._selection_summary(["Go", "Rust"], 62)[0])
+
+    def test_selection_summary_shrinks_to_fit(self):
+        names = ["Node.js & npm", "OpenJDK", "Go", "Rust"]
+        for width in (62, 40, 30, 20):
+            with self.subTest(width=width):
+                plain = AVA._selection_summary(names, width)[0]
+                self.assertLessEqual(len(plain) + 1, width)
+        self.assertEqual(AVA._selection_summary(names, 14)[0].strip(), "4 selected")
+        self.assertIn("Node.js & npm +3 more", AVA._selection_summary(names, 40)[0])
+
+
+class AiStatusTests(unittest.TestCase):
+    def setUp(self):
+        AVA._AI_STATUS_CACHE.clear()
+
+    def tearDown(self):
+        AVA._AI_STATUS_CACHE.clear()
+
+    def check(self, reply):
+        AVA._AI_STATUS_CACHE.clear()
+        with mock.patch.object(AVA, "_ollama_get", return_value=reply), \
+                mock.patch.object(AVA, "_model_name", return_value="m:1"):
+            return AVA._ai_state(), AVA._ai_status()
+
+    def test_offline_when_server_does_not_answer(self):
+        state, (variants, tone) = self.check(None)
+        self.assertEqual((state, tone), ("offline", "warn"))
+        self.assertIn("AI offline", variants)
+
+    def test_no_model_when_server_has_other_models(self):
+        state, (_, tone) = self.check({"models": [{"name": "other:1"}]})
+        self.assertEqual((state, tone), ("no model", "warn"))
+
+    def test_ready_when_model_is_present(self):
+        state, (variants, tone) = self.check({"models": [{"name": "m:1"}]})
+        self.assertEqual((state, tone), ("ready", "ok"))
+        self.assertTrue(any("AI ready" in v for v in variants))
+
+    def test_result_is_cached_for_the_menu_session(self):
+        with mock.patch.object(AVA, "_ollama_get", return_value=None) as get:
+            AVA._ai_state(); AVA._ai_state(); AVA._ai_state()
+        self.assertEqual(get.call_count, 1)
+
+
+class AsciiFallbackTests(unittest.TestCase):
+    def test_menu_is_pure_ascii_when_terminal_is_not_utf8(self):
+        code = (
+            "import io, contextlib, sys\n"
+            f"sys.path.insert(0, {REPO_ROOT!r})\n"
+            "import AVA\nfrom unittest import mock\n"
+            "AVA._AI_STATUS_CACHE['state'] = 'ready'\n"
+            "with mock.patch.object(AVA, '_term_width', return_value=80), \\\n"
+            "     mock.patch.object(AVA, '_term_height', return_value=40), \\\n"
+            "     mock.patch.object(AVA, '_cached_version', return_value='v1'):\n"
+            "    buf = io.StringIO()\n"
+            "    with contextlib.redirect_stdout(buf):\n"
+            "        AVA.render_full_menu([e.name for e in AVA.MENU_ITEMS], [True] + [False] * 9, 0)\n"
+            "        AVA.render_intro_box()\n"
+            "out = buf.getvalue()\n"
+            "bad = sorted({c for c in out if ord(c) > 127})\n"
+            "print('ASCII' if not bad else 'NON-ASCII ' + repr(bad))\n"
+            "print('BOXES' if '[x]' in out and '[ ]' in out else 'NO-BOXES')\n"
+        )
+        env = dict(os.environ, PYTHONIOENCODING="ascii")
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        self.assertEqual(result.stdout.split(), ["ASCII", "BOXES"], result.stdout + result.stderr)
+
+
+class NarrowBoxTests(unittest.TestCase):
+    def test_other_boxes_shrink_to_a_narrow_terminal(self):
+        with mock.patch.object(AVA, "_term_width", return_value=40):
+            boxed = _capture(AVA._print_boxed, "Suggested command", [("echo " + "word " * 30, ""), ("short", "")], "")
+            output = _capture(AVA._print_output_box, "line one\n" + "x" * 120 + "\nline three", True)
+            intro = _capture(AVA.render_intro_box)
+        for name, text in (("boxed", boxed), ("output", output), ("intro", intro)):
+            with self.subTest(box=name):
+                self.assertTrue(text.strip())
+                for line in text.split("\n"):
+                    self.assertLessEqual(len(line), 40, line)
+
+    def test_intro_title_is_shortened_when_narrow(self):
+        with mock.patch.object(AVA, "_term_width", return_value=36):
+            text = _capture(AVA.render_intro_box)
+        self.assertIn(f"v{AVA.AVA_VERSION}", text)
+        self.assertNotIn("Terminal Assistant", text)
 
 
 if __name__ == "__main__":
