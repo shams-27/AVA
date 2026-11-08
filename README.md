@@ -1,10 +1,14 @@
-# AVA — Terminal Assistant
+# AVA — Terminal Assistant    
 
 AVA is an interactive terminal assistant for Linux that automates
 common developer environment setup tasks. It's a single Python file with
 no dependencies beyond the standard library.
 
-![tests](https://github.com/shams-27/AVA/actions/workflows/tests.yml/badge.svg)
+## Testing status
+
+<a href="https://github.com/shams-27/AVA/actions/workflows/tests.yml">
+  <img src="https://github.com/shams-27/AVA/actions/workflows/tests.yml/badge.svg" alt="tests" width="140" height="40">
+</a>
 
 ## Quick start
 
