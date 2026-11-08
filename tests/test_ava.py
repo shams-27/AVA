@@ -238,6 +238,32 @@ class PackageManagerTests(unittest.TestCase):
         self.assertIsNone(AVA._package_install_cmd("htop; rm -rf /"))
 
 
+class SystemPromptTests(unittest.TestCase):
+    """The prompt is the only guard against the model answering chat requests with echo.
+    These tests cannot prove the model obeys it, only that the rules are present."""
+
+    def test_forbids_echo_for_jokes_and_chat(self):
+        prompt = AVA._system_prompt("tell me a joke")
+        self.assertIn("never use echo or printf to tell a joke", prompt)
+
+    def test_still_allows_empty_command_for_non_terminal_tasks(self):
+        prompt = AVA._system_prompt("tell me a joke")
+        self.assertIn('set "command" to ""', prompt)
+        self.assertIn("not a terminal task", prompt)
+
+    def test_requires_json_only_reply(self):
+        self.assertIn("single JSON object", AVA._system_prompt(""))
+
+    def test_math_hint_still_uses_shell_arithmetic(self):
+        # The echo rule must not conflict with the arithmetic hint.
+        prompt = AVA._system_prompt("what is 10 % 2")
+        self.assertIn("echo $((10 % 2))", prompt)
+        self.assertIn("echo may only print something the shell computes", prompt)
+
+    def test_unrelated_hints_are_not_included(self):
+        self.assertNotIn("lscpu", AVA._system_prompt("tell me a joke"))
+
+
 class ToolSpecTests(unittest.TestCase):
     """Every tool in the menu must have install steps for every supported manager."""
 
