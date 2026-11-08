@@ -275,7 +275,7 @@ class ToolSpecTests(unittest.TestCase):
                     for step in spec.install_cmds[pm]:
                         self.assertEqual(step[0], pm)
 
-    def test_no_non_linux_managers_remain(self):
+    def test_only_supported_managers_are_defined(self):
         for spec in AVA.TOOL_SPECS:
             self.assertEqual(set(spec.install_cmds), set(AVA.LINUX_MANAGERS))
 
