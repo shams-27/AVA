@@ -827,8 +827,9 @@ def _system_prompt(request: str = "") -> str:
         "Rules: prefer tools that ship with the system; use the package manager above for installs "
         "(include sudo on Linux when it is needed); never install anything unless the user asks to install it: "
         "when they want to use, run or open a tool, just run that tool; never use a destructive command unless the user "
-        'clearly asked for it; if the request is not a terminal task or cannot be done safely, set '
-        '"command" to "" and say why in "explanation".\n'
+        'clearly asked for it; never use echo or printf to tell a joke, answer a question or chat '
+        '(echo may only print something the shell computes); if the request is not a terminal task or '
+        'cannot be done safely, set "command" to "" and say why in "explanation".\n'
         + _hints_for(request)
     )
 
